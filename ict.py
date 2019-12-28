@@ -62,8 +62,6 @@ class ICT(models.MultiModel):
 
         loss = tf.nn.softmax_cross_entropy_with_logits_v2(labels=l, logits=logits_x)
         loss = tf.reduce_mean(loss)
-        tf.summary.scalar('losses/xe', loss)
-        tf.summary.scalar('losses/mt', loss_mt)
 
         post_ops.append(ema_op)
         post_ops.extend([tf.assign(v, v * (1 - wd)) for v in utils.model_vars('classify') if 'kernel' in v.name])
@@ -78,6 +76,12 @@ class ICT(models.MultiModel):
         classifier(x_in, training=True)
         train_bn = tf.group(*[v for v in tf.get_collection(tf.GraphKeys.UPDATE_OPS)
                               if v not in skip_ops])
+
+        self.train_step_monitor_summary = tf.summary.merge([
+            tf.summary.scalar('losses/xe', loss),
+            tf.summary.scalar('losses/mt', loss_mt)
+        ])
+
 
         return EasyDict(
             x=x_in, y=y_in, label=l_in, train_op=train_op, tune_op=train_bn,

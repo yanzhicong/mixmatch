@@ -20,6 +20,11 @@
 from collections import defaultdict
 import json
 import os
+import sys
+sys.path.append('./')
+
+# os.path.append('../')
+
 
 from absl import app
 from absl import flags

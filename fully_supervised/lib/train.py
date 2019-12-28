@@ -33,6 +33,8 @@ class ClassifyFullySupervised(ClassifySemi):
                                                      self.ops.label: x['label']})[1]
 
     def train(self, train_nimg, report_nimg):
+
+        print('train : ', train_nimg, report_nimg)
         if FLAGS.eval_ckpt:
             self.eval_checkpoint(FLAGS.eval_ckpt)
             return

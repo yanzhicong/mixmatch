@@ -21,9 +21,14 @@ import collections
 import gzip
 import os
 import sys
+
+sys.path.append('./')
+
 import tarfile
 import tempfile
 from urllib import request
+# import wget
+import subprocess
 
 from easydict import EasyDict
 from libml.data import DATA_DIR
@@ -32,12 +37,34 @@ import scipy.io
 import tensorflow as tf
 from tqdm import trange
 
+
 URLS = {
     'svhn': 'http://ufldl.stanford.edu/housenumbers/{}_32x32.mat',
     'cifar10': 'https://www.cs.toronto.edu/~kriz/cifar-10-matlab.tar.gz',
     'cifar100': 'https://www.cs.toronto.edu/~kriz/cifar-100-matlab.tar.gz',
     'stl10': 'http://ai.stanford.edu/~acoates/stl10/stl10_binary.tar.gz',
 }
+
+
+filenames = {
+    'cifar10' : [
+        'C:\\Data\\Cifar10\\cifar-10-matlab.tar.gz',
+        '/mnt/data01/dataset/Cifar10/cifar-10-matlab.tar.gz'
+    ]
+}
+
+def get_filepath(dataset):
+    for fp in filenames[dataset]:
+        if os.path.exists(fp):
+            return fp
+        else:
+            print('not exist : ', fp)
+    return None
+
+def download_file(url, filepath):
+    cmd = ['curl', str(url), '-o', str(filepath)]
+    print(cmd)
+    subprocess.call(cmd)
 
 
 def _encode_png(images):
@@ -54,7 +81,8 @@ def _load_svhn():
     splits = collections.OrderedDict()
     for split in ['train', 'test', 'extra']:
         with tempfile.NamedTemporaryFile() as f:
-            request.urlretrieve(URLS['svhn'].format(split), f.name)
+            # request.urlretrieve(URLS['svhn'].format(split), f.name)
+            download_file(URLS['svhn'].format(split), f.name)
             data_dict = scipy.io.loadmat(f.name)
         dataset = {}
         dataset['images'] = np.transpose(data_dict['X'], [3, 0, 1, 2])
@@ -75,7 +103,8 @@ def _load_stl10():
         if os.path.exists('stl10/stl10_binary.tar.gz'):
             f = open('stl10/stl10_binary.tar.gz', 'rb')
         else:
-            request.urlretrieve(URLS['stl10'], f.name)
+            # request.urlretrieve(URLS['stl10'], f.name)
+            download_file(URLS['stl10'], f.name)
         tar = tarfile.open(fileobj=f)
         train_X = tar.extractfile('stl10_binary/train_X.bin')
         train_y = tar.extractfile('stl10_binary/train_y.bin')
@@ -109,9 +138,11 @@ def _load_cifar10():
         return np.transpose(images.reshape((images.shape[0], 3, 32, 32)),
                             [0, 2, 3, 1])
 
-    with tempfile.NamedTemporaryFile() as f:
-        request.urlretrieve(URLS['cifar10'], f.name)
-        tar = tarfile.open(fileobj=f)
+    
+    filepath = get_filepath('cifar10')
+    if filepath is not None:
+        # f = open(filepath)
+        tar = tarfile.open(filepath)
         train_data_batches, train_data_labels = [], []
         for batch in range(1, 6):
             data_dict = scipy.io.loadmat(tar.extractfile(
@@ -119,11 +150,30 @@ def _load_cifar10():
             train_data_batches.append(data_dict['data'])
             train_data_labels.append(data_dict['labels'].flatten())
         train_set = {'images': np.concatenate(train_data_batches, axis=0),
-                     'labels': np.concatenate(train_data_labels, axis=0)}
+                        'labels': np.concatenate(train_data_labels, axis=0)}
         data_dict = scipy.io.loadmat(tar.extractfile(
             'cifar-10-batches-mat/test_batch.mat'))
         test_set = {'images': data_dict['data'],
                     'labels': data_dict['labels'].flatten()}
+    else:
+        raise Exception("dataset cifar10 file not found")
+
+    # with tempfile.NamedTemporaryFile() as f:
+    #     # request.urlretrieve(URLS['cifar10'], f.name)
+    #     download_file(URLS['cifar10'], f.name)
+    #     tar = tarfile.open(fileobj=f)
+    #     train_data_batches, train_data_labels = [], []
+    #     for batch in range(1, 6):
+    #         data_dict = scipy.io.loadmat(tar.extractfile(
+    #             'cifar-10-batches-mat/data_batch_{}.mat'.format(batch)))
+    #         train_data_batches.append(data_dict['data'])
+    #         train_data_labels.append(data_dict['labels'].flatten())
+    #     train_set = {'images': np.concatenate(train_data_batches, axis=0),
+    #                  'labels': np.concatenate(train_data_labels, axis=0)}
+    #     data_dict = scipy.io.loadmat(tar.extractfile(
+    #         'cifar-10-batches-mat/test_batch.mat'))
+    #     test_set = {'images': data_dict['data'],
+    #                 'labels': data_dict['labels'].flatten()}
     train_set['images'] = _encode_png(unflatten(train_set['images']))
     test_set['images'] = _encode_png(unflatten(test_set['images']))
     return dict(train=train_set, test=test_set)
@@ -134,8 +184,10 @@ def _load_cifar100():
         return np.transpose(images.reshape((images.shape[0], 3, 32, 32)),
                             [0, 2, 3, 1])
 
+
     with tempfile.NamedTemporaryFile() as f:
-        request.urlretrieve(URLS['cifar100'], f.name)
+        # request.urlretrieve(URLS['cifar100'], f.name)
+        download_file(URLS['cifar100'], f.name)
         tar = tarfile.open(fileobj=f)
         data_dict = scipy.io.loadmat(tar.extractfile('cifar-100-matlab/train.mat'))
         train_set = {'images': data_dict['data'],
@@ -193,12 +245,12 @@ def _is_installed_folder(name, folder):
 CONFIGS = dict(
     cifar10=dict(loader=_load_cifar10,
                  checksums=dict(train=None, test=None)),
-    cifar100=dict(loader=_load_cifar100,
-                  checksums=dict(train=None, test=None)),
-    svhn=dict(loader=_load_svhn,
-              checksums=dict(train=None, test=None, extra=None)),
-    stl10=dict(loader=_load_stl10,
-               checksums=dict(train=None, test=None)),
+    # cifar100=dict(loader=_load_cifar100,
+    #               checksums=dict(train=None, test=None)),
+    # svhn=dict(loader=_load_svhn,
+    #           checksums=dict(train=None, test=None, extra=None)),
+    # stl10=dict(loader=_load_stl10,
+    #            checksums=dict(train=None, test=None)),
 )
 
 if __name__ == '__main__':
@@ -213,16 +265,18 @@ if __name__ == '__main__':
     for name, config in CONFIGS.items():
         if name not in subset:
             continue
-        if 'is_installed' in config:
-            if config['is_installed']():
-                print('Skipping already installed:', name)
-                continue
-        elif _is_installed(name, config['checksums']):
-            print('Skipping already installed:', name)
-            continue
+
+        # if 'is_installed' in config:
+        #     if config['is_installed']():
+        #         print('Skipping already installed:', name)
+        #         continue
+        # elif _is_installed(name, config['checksums']):
+        #     print('Skipping already installed:', name)
+        #     continue
         print('Preparing', name)
         datas = config['loader']()
         saver = config.get('saver', _save_as_tfrecord)
+
         for sub_name, data in datas.items():
             if sub_name == 'readme':
                 filename = os.path.join(DATA_DIR, '%s-%s.txt' % (name, sub_name))

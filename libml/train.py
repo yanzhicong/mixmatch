@@ -22,6 +22,7 @@ import tensorflow as tf
 from absl import flags
 from easydict import EasyDict
 from tqdm import trange
+import threading
 
 from libml import data, utils
 
@@ -30,16 +31,21 @@ flags.DEFINE_string('train_dir', './experiments',
                     'Folder where to save training data.')
 flags.DEFINE_float('lr', 0.0001, 'Learning rate.')
 flags.DEFINE_integer('batch', 64, 'Batch size.')
-flags.DEFINE_integer('train_kimg', 1 << 14, 'Training duration in kibi-samples.')
-flags.DEFINE_integer('report_kimg', 64, 'Report summary period in kibi-samples.')
-flags.DEFINE_integer('save_kimg', 64, 'Save checkpoint period in kibi-samples.')
+flags.DEFINE_integer('train_kimg', 1 << 14,
+                     'Training duration in kibi-samples.')
+flags.DEFINE_integer(
+    'report_kimg', 64, 'Report summary period in kibi-samples.')
+flags.DEFINE_integer(
+    'save_kimg', 64, 'Save checkpoint period in kibi-samples.')
 flags.DEFINE_integer('keep_ckpt', 50, 'Number of checkpoints to keep.')
-flags.DEFINE_string('eval_ckpt', '', 'Checkpoint to evaluate. If provided, do not do training, just do eval.')
+flags.DEFINE_string(
+    'eval_ckpt', '', 'Checkpoint to evaluate. If provided, do not do training, just do eval.')
 
 
 class Model:
     def __init__(self, train_dir: str, dataset: data.DataSet, **kwargs):
-        self.train_dir = os.path.join(train_dir, self.experiment_name(**kwargs))
+        self.train_dir = os.path.join(
+            train_dir, self.experiment_name(**kwargs))
         self.params = EasyDict(kwargs)
         self.dataset = dataset
         self.session = None
@@ -56,7 +62,8 @@ class Model:
         for k, v in sorted(kwargs.items()):
             print('%-32s %s' % (k, v))
         print(' Model '.center(80, '-'))
-        to_print = [tuple(['%s' % x for x in (v.name, np.prod(v.shape), v.shape)]) for v in utils.model_vars(None)]
+        to_print = [tuple(['%s' % x for x in (v.name, np.prod(v.shape), v.shape)])
+                          for v in utils.model_vars(None)]
         to_print.append(('Total', str(sum(int(x[1]) for x in to_print)), ''))
         sizes = [max([len(x[i]) for x in to_print]) for i in range(3)]
         fmt = '%%-%ds  %%%ds  %%%ds' % tuple(sizes)
@@ -90,7 +97,8 @@ class Model:
 
     def save_args(self, **extra_params):
         with open(os.path.join(self.arg_dir, 'args.json'), 'w') as f:
-            json.dump({**self.params, **extra_params}, f, sort_keys=True, indent=4)
+            json.dump({**self.params, **extra_params},
+                      f, sort_keys=True, indent=4)
 
     @classmethod
     def load(cls, train_dir):
@@ -113,7 +121,8 @@ class Model:
             ckpt = os.path.abspath(ckpt)
         saver.restore(self.session, ckpt)
         self.tmp.step = self.session.run(self.step)
-        print('Eval model %s at global_step %d' % (self.__class__.__name__, self.tmp.step))
+        print('Eval model %s at global_step %d' %
+              (self.__class__.__name__, self.tmp.step))
         return self
 
     def model(self, **kwargs):
@@ -128,66 +137,115 @@ class ClassifySemi(Model):
 
     def __init__(self, train_dir: str, dataset: data.DataSet, nclass: int, **kwargs):
         self.nclass = nclass
+        self.train_step_monitor_summary = None
+        # self.mutex = threading.Lock()
+
         Model.__init__(self, train_dir, dataset, nclass=nclass, **kwargs)
 
-    def train_step(self, train_session, data_labeled, data_unlabeled):
-        x, y = self.session.run([data_labeled, data_unlabeled])
-        self.tmp.step = train_session.run([self.ops.train_op, self.ops.update_step],
-                                          feed_dict={self.ops.x: x['image'],
-                                                     self.ops.y: y['image'],
-                                                     self.ops.label: x['label']})[1]
+    def train_step(self, train_session, data_labeled, data_unlabeled=None, summary=None):
 
-    def train(self, train_nimg, report_nimg):
+        if data_unlabeled is not None:
+            x, y = self.session.run([data_labeled, data_unlabeled])
+            if summary is not None:
+                
+                _, s, self.tmp.step = train_session.run([self.ops.train_op, summary, self.ops.update_step],
+                                                feed_dict={self.ops.x: x['image'],
+                                                            self.ops.y: y['image'],
+                                                            self.ops.label: x['label']})
+                self.summary_writer.add_summary(s, global_step=self.tmp.step)
+            else:
+                # x, y = self.session.run([data_labeled, data_unlabeled])
+                self.tmp.step = train_session.run([self.ops.train_op, self.ops.update_step],
+                                                feed_dict={self.ops.x: x['image'],
+                                                            self.ops.y: y['image'],
+                                                            self.ops.label: x['label']})[1]
+        else:
+            x = self.session.run([data_labeled,])[0]
+            if summary is not None:
+                
+                _, s, self.tmp.step = train_session.run([self.ops.train_op, summary, self.ops.update_step],
+                                                feed_dict={self.ops.x: x['image'],
+                                                            self.ops.label: x['label']})
+                self.summary_writer.add_summary(s, global_step=self.tmp.step)
+            else:
+                self.tmp.step = train_session.run([self.ops.train_op, self.ops.update_step],
+                                                feed_dict={self.ops.x: x['image'],
+                                                            self.ops.label: x['label']})[1]
+
+
+    def train(self, train_nimg, report_nimg, summary_interval=10, ssl=True):
+        print('train : ', train_nimg, report_nimg)
         if FLAGS.eval_ckpt:
             self.eval_checkpoint(FLAGS.eval_ckpt)
             return
         batch = FLAGS.batch
-        train_labeled = self.dataset.train_labeled.batch(batch).prefetch(16)
-        train_labeled = train_labeled.make_one_shot_iterator().get_next()
-        train_unlabeled = self.dataset.train_unlabeled.batch(batch).prefetch(16)
-        train_unlabeled = train_unlabeled.make_one_shot_iterator().get_next()
         scaffold = tf.train.Scaffold(saver=tf.train.Saver(max_to_keep=FLAGS.keep_ckpt,
                                                           pad_step_number=10))
 
-        with tf.Session(config=utils.get_config()) as sess:
-            self.session = sess
-            self.cache_eval()
+        def get_dataset_reader(dataset, batch, prefetch=16):
+            d = dataset.batch(batch).prefetch(
+                prefetch).make_initializable_iterator()
+            return d.initializer, d.get_next()
 
-        with tf.train.MonitoredTrainingSession(
-                scaffold=scaffold,
-                checkpoint_dir=self.checkpoint_dir,
-                config=utils.get_config(),
-                save_checkpoint_steps=FLAGS.save_kimg << 10,
-                save_summaries_steps=report_nimg - batch) as train_session:
-            self.session = train_session._tf_sess()
+        with tf.name_scope('dataset_reader'):
+            self.train_labeled = get_dataset_reader(self.dataset.train_labeled, batch)
+            if ssl:
+                self.train_unlabeled = get_dataset_reader(self.dataset.train_unlabeled, batch)
+            else:
+                self.train_unlabeled = None, None
+            self.eval_labeled = get_dataset_reader(self.dataset.eval_labeled, batch)
+            self.valid = get_dataset_reader(self.dataset.valid, batch)
+            self.test = get_dataset_reader(self.dataset.test, batch)
+
+        self.summary_writer = tf.summary.FileWriter(self.checkpoint_dir, graph=tf.get_default_graph())
+
+        with tf.Session(config=utils.get_config()) as train_session:
+            self.session = train_session
+            self.session.run(tf.global_variables_initializer())
             self.tmp.step = self.session.run(self.step)
+
+            # run dataset initializer
+            if self.train_unlabeled[0] is not None:
+                self.session.run([self.train_labeled[0], self.train_unlabeled[0]])
+            else:
+                self.session.run([self.train_labeled[0],])
+            
             while self.tmp.step < train_nimg:
                 loop = trange(self.tmp.step % report_nimg, report_nimg, batch,
                               leave=False, unit='img', unit_scale=batch,
                               desc='Epoch %d/%d' % (1 + (self.tmp.step // report_nimg), train_nimg // report_nimg))
-                for _ in loop:
-                    self.train_step(train_session, train_labeled, train_unlabeled)
+
+                for ind in loop:
+                    if ind % summary_interval == 0:
+                        self.train_step(train_session, self.train_labeled[1], self.train_unlabeled[1], self.train_step_monitor_summary)
+                    else:
+                        self.train_step(train_session, self.train_labeled[1], self.train_unlabeled[1])
+
+
                     while self.tmp.print_queue:
                         loop.write(self.tmp.print_queue.pop(0))
+
+                s, st = self.session.run([self.summary, self.step])
+                self.summary_writer.add_summary(s, global_step=st)
+
+
             while self.tmp.print_queue:
                 print(self.tmp.print_queue.pop(0))
 
+
     def tune(self, train_nimg):
         batch = FLAGS.batch
-        train_labeled = self.dataset.train_labeled.batch(batch).prefetch(16)
-        train_labeled = train_labeled.make_one_shot_iterator().get_next()
-        train_unlabeled = self.dataset.train_unlabeled.batch(batch).prefetch(16)
-        train_unlabeled = train_unlabeled.make_one_shot_iterator().get_next()
 
+        self.session.run([self.train_labeled[0], self.train_unlabeled[0]])
         for _ in trange(0, train_nimg, batch, leave=False, unit='img', unit_scale=batch, desc='Tuning'):
-            x, y = self.session.run([train_labeled, train_unlabeled])
+            x, y = self.session.run([self.train_labeled[1], self.train_unlabeled[1]])
             self.session.run([self.ops.tune_op], feed_dict={self.ops.x: x['image'],
                                                             self.ops.y: y['image'],
                                                             self.ops.label: x['label']})
 
     def eval_checkpoint(self, ckpt=None):
         self.eval_mode(ckpt)
-        self.cache_eval()
+        # self.cache_eval()
         raw = self.eval_stats(classify_op=self.ops.classify_raw)
         ema = self.eval_stats(classify_op=self.ops.classify_op)
         self.tune(16384)
@@ -199,52 +257,63 @@ class ClassifySemi(Model):
         print('%16s %8s %8s %8s' % (('tuned_raw',) + tuple('%.2f' % x for x in tuned_raw)))
         print('%16s %8s %8s %8s' % (('tuned_ema',) + tuple('%.2f' % x for x in tuned_ema)))
 
-    def cache_eval(self):
-        """Cache datasets for computing eval stats."""
-
-        def collect_samples(dataset):
-            """Return numpy arrays of all the samples from a dataset."""
-            it = dataset.batch(1).prefetch(16).make_one_shot_iterator().get_next()
-            images, labels = [], []
-            while 1:
-                try:
-                    v = self.session.run(it)
-                except tf.errors.OutOfRangeError:
-                    break
-                images.append(v['image'])
-                labels.append(v['label'])
-
-            images = np.concatenate(images, axis=0)
-            labels = np.concatenate(labels, axis=0)
-            return images, labels
-
-        if 'test' not in self.tmp.cache:
-            self.tmp.cache.test = collect_samples(self.dataset.test)
-            self.tmp.cache.valid = collect_samples(self.dataset.valid)
-            self.tmp.cache.train_labeled = collect_samples(self.dataset.eval_labeled)
 
     def eval_stats(self, batch=None, feed_extra=None, classify_op=None):
         """Evaluate model on train, valid and test."""
         batch = batch or FLAGS.batch
         classify_op = self.ops.classify_op if classify_op is None else classify_op
         accuracies = []
-        for subset in ('train_labeled', 'valid', 'test'):
-            images, labels = self.tmp.cache[subset]
-            predicted = []
+        weighted_accuracies = []
 
-            for x in range(0, images.shape[0], batch):
-                p = self.session.run(
-                    classify_op,
-                    feed_dict={
-                        self.ops.x: images[x:x + batch],
-                        **(feed_extra or {})
-                    })
-                predicted.append(p)
+        subset_list = ['train_labeled', 'valid', 'test']
+        dataset_list = [self.eval_labeled, self.valid, self.test]
+
+        # def cal_entropy(pred):
+        #     return np.
+
+        def cal_entropy(pred):
+            Z = np.maximum(pred, 5e-10)
+            nb_classes = Z.shape[1]
+            Z = Z / Z.sum(axis=1, keepdims=True)
+            Z = - 1.0 *  (Z * np.log(Z)).sum(axis=1)
+            W = 1.0 - Z / np.log(float(nb_classes))
+            return W
+
+
+        # with self.mutex:
+        for subset, dataset in zip(subset_list, dataset_list):
+            predicted = []
+            weights = []
+            labels = []
+
+            self.session.run([dataset[0]])
+            while True:
+                try:
+                    v = self.session.run(dataset[1])
+                    p = self.session.run(
+                        classify_op,
+                        feed_dict={
+                            self.ops.x: v['image'],
+                            **(feed_extra or {})
+                        })
+
+                    predicted.append(p.argmax(1))
+                    labels.append(v['label'])
+                    weights.append(cal_entropy(p))
+
+                except tf.errors.OutOfRangeError:
+                    break
             predicted = np.concatenate(predicted, axis=0)
-            accuracies.append((predicted.argmax(1) == labels).mean() * 100)
-        self.train_print('kimg %-5d  accuracy train/valid/test  %.2f  %.2f  %.2f' %
-                         tuple([self.tmp.step >> 10] + accuracies))
-        return np.array(accuracies, 'f')
+            labels = np.concatenate(labels, axis=0)
+            weights = np.concatenate(weights, axis=0)
+
+            accuracies.append((predicted == labels).mean() * 100)
+            weighted_accuracies.append(((predicted == labels).astype(np.float) * weights).sum() / weights.sum() * 100)
+
+        self.train_print('kimg %-5d  accuracy train/valid/test  %.2f  %.2f  %.2f  weighted accuracy train/valid/test  %.2f  %.2f  %.2f' %
+                        tuple([self.tmp.step >> 10] + accuracies + weighted_accuracies))
+        return np.array(accuracies, 'f'), np.array(weighted_accuracies, 'f')
+
 
     def add_summaries(self, feed_extra=None, **kwargs):
         del kwargs
@@ -252,7 +321,12 @@ class ClassifySemi(Model):
         def gen_stats():
             return self.eval_stats(feed_extra=feed_extra)
 
-        accuracies = tf.py_func(gen_stats, [], tf.float32)
-        tf.summary.scalar('accuracy/train_labeled', accuracies[0])
-        tf.summary.scalar('accuracy/valid', accuracies[1])
-        tf.summary.scalar('accuracy', accuracies[2])
+        accuracies = tf.py_func(gen_stats, [], [tf.float32, tf.float32])
+        self.summary = tf.summary.merge([    
+                tf.summary.scalar('accuracy/train_labeled', accuracies[0][0]),
+                tf.summary.scalar('accuracy/valid', accuracies[0][1]),
+                tf.summary.scalar('accuracy/test', accuracies[0][2]),
+                tf.summary.scalar('weighted_accuracy/train_labeled', accuracies[1][0]),
+                tf.summary.scalar('weighted_accuracy/valid', accuracies[1][1]),
+                tf.summary.scalar('weighted_accuracy/test', accuracies[1][2]),
+                ])

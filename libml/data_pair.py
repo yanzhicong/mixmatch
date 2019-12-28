@@ -15,7 +15,7 @@
 import itertools
 
 from absl import flags
-from libml.data import DataSet, augment_cifar10, augment_svhn, augment_stl10
+from libml.data import DataSet, DataSet2, augment_cifar10, augment_svhn, augment_stl10, argument_miniimagenet
 import tensorflow as tf
 
 flags.DEFINE_integer('nu', 2, 'Number of augmentations for class-consistency.')
@@ -34,21 +34,30 @@ def stack_augment(augment):
 
 DATASETS = {}
 DATASETS.update([DataSet.creator('cifar10', seed, label, valid, [augment_cifar10, stack_augment(augment_cifar10)])
-                 for seed, label, valid in
-                 itertools.product(range(6), [250, 500, 1000, 2000, 4000, 8000], [1, 5000])])
-DATASETS.update(
-    [DataSet.creator('cifar100', seed, label, valid, [augment_cifar10, stack_augment(augment_cifar10)], nclass=100)
-     for seed, label, valid in
-     itertools.product(range(6), [10000], [1, 5000])])
+                    for seed, label, valid in
+                        itertools.product(range(6), [250, 500, 1000, 2000, 4000, 8000], [1, 5000])])
+
+DATASETS.update([DataSet.creator('cifar100', seed, label, valid, [augment_cifar10, stack_augment(augment_cifar10)], nclass=100)
+                    for seed, label, valid in
+                        itertools.product(range(6), [10000], [1, 5000])])
+
 DATASETS.update([DataSet.creator('stl10', seed, label, valid, [augment_stl10, stack_augment(augment_stl10)], height=96,
                                  width=96, do_memoize=False)
-                 for seed, label, valid in
-                 itertools.product(range(6), [1000, 5000], [1, 500])])
+                    for seed, label, valid in
+                        itertools.product(range(6), [1000, 5000], [1, 500])])
+
 DATASETS.update([DataSet.creator('svhn', seed, label, valid, [augment_svhn, stack_augment(augment_svhn)],
                                  do_memoize=False)
-                 for seed, label, valid in
-                 itertools.product(range(6), [250, 500, 1000, 2000, 4000, 8000], [1, 5000])])
+                    for seed, label, valid in
+                        itertools.product(range(6), [250, 500, 1000, 2000, 4000, 8000], [1, 5000])])
+
 DATASETS.update([DataSet.creator('svhn_noextra', seed, label, valid, [augment_svhn, stack_augment(augment_svhn)],
                                  do_memoize=False)
-                 for seed, label, valid in
-                 itertools.product(range(6), [250, 500, 1000, 2000, 4000, 8000], [1, 5000])])
+                    for seed, label, valid in
+                        itertools.product(range(6), [250, 500, 1000, 2000, 4000, 8000], [1, 5000])])
+
+
+DATASETS.update(
+    [DataSet2.creator('miniimagenet', seed, label, valid, [argument_miniimagenet, stack_augment(argument_miniimagenet)], width=84, height=84, nclass=100, do_memoize=False)
+                    for seed, label, valid in
+                        itertools.product(range(6), [40, 100], [1, 50])])
