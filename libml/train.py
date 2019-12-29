@@ -30,29 +30,38 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('train_dir', './experiments',
                     'Folder where to save training data.')
 flags.DEFINE_float('lr', 0.0001, 'Learning rate.')
+flags.DEFINE_float('lr_decay_rate', 0.001, 'Learning rate decay rate.')
+flags.DEFINE_integer('decay_start_epoch', 20, 'Decay start epoch.')
 flags.DEFINE_integer('batch', 64, 'Batch size.')
-flags.DEFINE_integer('train_kimg', 1 << 14,
-                     'Training duration in kibi-samples.')
-flags.DEFINE_integer(
-    'report_kimg', 64, 'Report summary period in kibi-samples.')
-flags.DEFINE_integer(
-    'save_kimg', 64, 'Save checkpoint period in kibi-samples.')
+flags.DEFINE_integer('epochs', 100, 'Training epochs.')
+flags.DEFINE_integer('steps_per_epoch', 60000//64, 'Steps per epoch.')
+flags.DEFINE_integer('imgs_per_epoch', 60000, 'images per epoch.')
+flags.DEFINE_integer('save_kimg', 64, 'Save checkpoint period in kibi-samples.')
 flags.DEFINE_integer('keep_ckpt', 50, 'Number of checkpoints to keep.')
 flags.DEFINE_string(
     'eval_ckpt', '', 'Checkpoint to evaluate. If provided, do not do training, just do eval.')
 
 
 class Model:
+
+
     def __init__(self, train_dir: str, dataset: data.DataSet, **kwargs):
         self.train_dir = os.path.join(
             train_dir, self.experiment_name(**kwargs))
+
         self.params = EasyDict(kwargs)
         self.dataset = dataset
         self.session = None
         self.tmp = EasyDict(print_queue=[], cache=EasyDict())
         self.step = tf.train.get_or_create_global_step()
+        self.epoch = tf.get_variable('global_epoch', shape=[], dtype=tf.int32, initializer=tf.zeros_initializer(), trainable=False)
+
+        self.learning_rate = utils.get_exponential_learning_rate(lr=FLAGS.lr, global_epoch = self.epoch, start_epoch=FLAGS.decay_start_epoch, total_epochs=FLAGS.epochs, decay_rate=FLAGS.lr_decay_rate)
+        kwargs['lr'] = self.learning_rate
+
         self.ops = self.model(**kwargs)
-        self.ops.update_step = tf.assign_add(self.step, FLAGS.batch)
+
+        self.ops.update_step = tf.assign_add(self.step, 1)
         self.add_summaries(**kwargs)
 
         print(' Config '.center(80, '-'))
@@ -147,14 +156,12 @@ class ClassifySemi(Model):
         if data_unlabeled is not None:
             x, y = self.session.run([data_labeled, data_unlabeled])
             if summary is not None:
-                
                 _, s, self.tmp.step = train_session.run([self.ops.train_op, summary, self.ops.update_step],
                                                 feed_dict={self.ops.x: x['image'],
                                                             self.ops.y: y['image'],
                                                             self.ops.label: x['label']})
                 self.summary_writer.add_summary(s, global_step=self.tmp.step)
             else:
-                # x, y = self.session.run([data_labeled, data_unlabeled])
                 self.tmp.step = train_session.run([self.ops.train_op, self.ops.update_step],
                                                 feed_dict={self.ops.x: x['image'],
                                                             self.ops.y: y['image'],
@@ -162,7 +169,6 @@ class ClassifySemi(Model):
         else:
             x = self.session.run([data_labeled,])[0]
             if summary is not None:
-                
                 _, s, self.tmp.step = train_session.run([self.ops.train_op, summary, self.ops.update_step],
                                                 feed_dict={self.ops.x: x['image'],
                                                             self.ops.label: x['label']})
@@ -172,9 +178,7 @@ class ClassifySemi(Model):
                                                 feed_dict={self.ops.x: x['image'],
                                                             self.ops.label: x['label']})[1]
 
-
-    def train(self, train_nimg, report_nimg, summary_interval=10, ssl=True):
-        print('train : ', train_nimg, report_nimg)
+    def train(self, epochs, steps_per_epoch, summary_interval=100, ssl=True):
         if FLAGS.eval_ckpt:
             self.eval_checkpoint(FLAGS.eval_ckpt)
             return
@@ -210,13 +214,19 @@ class ClassifySemi(Model):
             else:
                 self.session.run([self.train_labeled[0],])
             
-            while self.tmp.step < train_nimg:
-                loop = trange(self.tmp.step % report_nimg, report_nimg, batch,
-                              leave=False, unit='img', unit_scale=batch,
-                              desc='Epoch %d/%d' % (1 + (self.tmp.step // report_nimg), train_nimg // report_nimg))
+            # while self.tmp.step < train_nimg:
 
-                for ind in loop:
-                    if ind % summary_interval == 0:
+            for epoch_ind in range(epochs):
+
+                self.session.run(self.epoch.assign(epoch_ind))
+                print(self.session.run(self.learning_rate))
+
+                loop = trange(0, steps_per_epoch*batch, batch,
+                              leave=False, unit='img', unit_scale=batch,
+                              desc='Epoch %d/%d' % (1 + epoch_ind, epochs))
+
+                for step_ind in loop:
+                    if step_ind % summary_interval == 0:
                         self.train_step(train_session, self.train_labeled[1], self.train_unlabeled[1], self.train_step_monitor_summary)
                     else:
                         self.train_step(train_session, self.train_labeled[1], self.train_unlabeled[1])
@@ -330,3 +340,4 @@ class ClassifySemi(Model):
                 tf.summary.scalar('weighted_accuracy/valid', accuracies[1][1]),
                 tf.summary.scalar('weighted_accuracy/test', accuracies[1][2]),
                 ])
+

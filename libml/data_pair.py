@@ -15,7 +15,7 @@
 import itertools
 
 from absl import flags
-from libml.data import DataSet, DataSet2, augment_cifar10, augment_svhn, augment_stl10, argument_miniimagenet
+from libml.data import DataSet, TxtDataSet, augment_cifar10, augment_svhn, augment_stl10, argument_miniimagenet
 import tensorflow as tf
 
 flags.DEFINE_integer('nu', 2, 'Number of augmentations for class-consistency.')
@@ -58,6 +58,6 @@ DATASETS.update([DataSet.creator('svhn_noextra', seed, label, valid, [augment_sv
 
 
 DATASETS.update(
-    [DataSet2.creator('miniimagenet', seed, label, valid, [argument_miniimagenet, stack_augment(argument_miniimagenet)], width=84, height=84, nclass=100, do_memoize=False)
+    [TxtDataSet.creator('miniimagenet', seed, label, valid, [argument_miniimagenet, stack_augment(argument_miniimagenet)], width=84, height=84, nclass=100, do_memoize=False)
                     for seed, label, valid in
                         itertools.product(range(6), [40, 100], [1, 50])])

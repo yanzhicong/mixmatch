@@ -314,10 +314,9 @@ class TxtDataSet:
 
 
             if FLAGS.whiten:
-                # mean, std = compute_mean_std(train_labeled.concatenate(train_unlabeled))
                 mean_var = json.loads(open(os.path.join(DATA_DIR, '%s-meanvar.json' % name), 'r').read())
-                mean = np.array(mean_var['mean']) / 255.0
-                std = np.array(mean_var['var']) / np.sqrt(255.0)
+                mean = np.array(mean_var['mean'])
+                std = np.array(mean_var['var'])
             else:
                 mean, std = 0, 1
 
@@ -332,6 +331,54 @@ class TxtDataSet:
                        height=height, width=width, mean=mean, std=std)
 
         return name + name_suffix + fullname + '-' + str(valid), create
+
+
+
+    @classmethod
+    def full_creator(cls, name, valid, augment, parse_fn=default_parse, do_memoize=True, colors=3,
+                nclass=10, height=32, width=32, name_suffix=''):
+
+        if not isinstance(augment, list):
+            augment = [augment] * 2
+
+        fn = memoize if do_memoize else lambda x: x.repeat().shuffle(FLAGS.shuffle)
+
+        def create():
+            p_labeled = p_unlabeled = None
+            para = max(1, len(utils.get_available_gpus())) * FLAGS.para_augment
+
+            if FLAGS.p_unlabeled:
+                sequence = FLAGS.p_unlabeled.split(',')
+                p_unlabeled = np.array(list(map(float, sequence)), dtype=np.float32)
+                p_unlabeled /= np.max(p_unlabeled)
+
+            train_labeled = txt_dataset_imglist_w_label([os.path.join(DATA_DIR, '%s-train.txt' % name)])
+            train_unlabeled, train_valid = txt_dataset_imglist_w_label([os.path.join(DATA_DIR, '%s-train.txt' % name)], split_valid=valid)
+
+            eval_labeled = txt_dataset_imglist_w_label([os.path.join(DATA_DIR, '%s-train.txt' % name)])
+            eval_unlabeled, eval_valid = txt_dataset_imglist_w_label([os.path.join(DATA_DIR, '%s-train.txt' % name)], split_valid=valid)
+
+            test = txt_dataset_imglist_w_label([os.path.join(DATA_DIR, '%s-test.txt' % name)])
+
+
+            if FLAGS.whiten:
+                mean_var = json.loads(open(os.path.join(DATA_DIR, '%s-meanvar.json' % name), 'r').read())
+                mean = np.array(mean_var['mean'])
+                std = np.array(mean_var['var'])
+            else:
+                mean, std = 0, 1
+
+            return cls(name + name_suffix,
+                       train_labeled=fn(train_labeled).map(augment[0], para),
+                       train_unlabeled=fn(train_unlabeled).map(augment[1], para),
+                       eval_labeled=eval_labeled,
+                       eval_unlabeled=eval_unlabeled,
+                       valid=eval_valid,
+                       test=test,
+                       nclass=nclass, colors=colors, p_labeled=p_labeled, p_unlabeled=p_unlabeled,
+                       height=height, width=width, mean=mean, std=std)
+
+        return name + name_suffix + '-' + str(valid), create
 
 
 augment_stl10 = lambda x: dict(image=augment_shift(augment_mirror(x['image']), 12), label=x['label'])
@@ -365,3 +412,5 @@ DATASETS.update([TxtDataSet.creator('miniimagenet', seed, label, valid, argument
                     for seed, label, valid in
                         itertools.product(range(6), [40, 100], [1, 50])])
 
+DATASETS.update([TxtDataSet.full_creator('miniimagenet', valid, argument_miniimagenet, width=84, height=84, nclass=100, do_memoize=False)
+                    for valid in [1, 50]])

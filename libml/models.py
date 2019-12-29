@@ -34,42 +34,43 @@ class CNN13(ClassifySemi):
         conv_args = dict(kernel_size=3, activation=tf.nn.leaky_relu, padding='same')
         bn_args = dict(training=training, momentum=0.999)
 
-        with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
-            y = tf.layers.conv2d(x, filters, **conv_args)
-            y = tf.layers.batch_normalization(y, **bn_args)
-            print('\tintermediate : ', y.get_shape())
-            y = tf.layers.conv2d(y, filters, **conv_args)
-            y = tf.layers.batch_normalization(y, **bn_args)
-            print('\tintermediate : ', y.get_shape())
-            y = tf.layers.conv2d(y, filters, **conv_args)
-            y = tf.layers.batch_normalization(y, **bn_args)
-            print('\tintermediate : ', y.get_shape())
-            y = tf.layers.max_pooling2d(y, 2, 2)
-            print('\tintermediate : ', y.get_shape())
-            y = tf.layers.conv2d(y, 2 * filters, **conv_args)
-            y = tf.layers.batch_normalization(y, **bn_args)
-            print('\tintermediate : ', y.get_shape())
-            y = tf.layers.conv2d(y, 2 * filters, **conv_args)
-            y = tf.layers.batch_normalization(y, **bn_args)
-            print('\tintermediate : ', y.get_shape())
-            y = tf.layers.conv2d(y, 2 * filters, **conv_args)
-            y = tf.layers.batch_normalization(y, **bn_args)
-            print('\tintermediate : ', y.get_shape())
-            y = tf.layers.max_pooling2d(y, 2, 2)
-            print('\tintermediate : ', y.get_shape())
-            y = tf.layers.conv2d(y, 4 * filters, kernel_size=3, activation=tf.nn.leaky_relu, padding='valid')
-            y = tf.layers.batch_normalization(y, **bn_args)
-            print('\tintermediate : ', y.get_shape())
-            y = tf.layers.conv2d(y, 2 * filters, kernel_size=1, activation=tf.nn.leaky_relu, padding='same')
-            y = tf.layers.batch_normalization(y, **bn_args)
-            print('\tintermediate : ', y.get_shape())
-            y = tf.layers.conv2d(y, 1 * filters, kernel_size=1, activation=tf.nn.leaky_relu, padding='same')
-            y = tf.layers.batch_normalization(y, **bn_args)
-            print('\tintermediate : ', y.get_shape())
-            y = tf.reduce_mean(y, [1, 2])  # (b, 6, 6, 128) -> (b, 128)
-            logits = tf.layers.dense(y, self.nclass)
-        print('CNN13 classifier, output : ', logits.get_shape())
-        return logits
+        with tf.name_scope('CNN13'):
+            with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
+                y = tf.layers.conv2d(x, filters, **conv_args)
+                y = tf.layers.batch_normalization(y, **bn_args)
+                print('\tintermediate : ', y.get_shape())
+                y = tf.layers.conv2d(y, filters, **conv_args)
+                y = tf.layers.batch_normalization(y, **bn_args)
+                print('\tintermediate : ', y.get_shape())
+                y = tf.layers.conv2d(y, filters, **conv_args)
+                y = tf.layers.batch_normalization(y, **bn_args)
+                print('\tintermediate : ', y.get_shape())
+                y = tf.layers.max_pooling2d(y, 2, 2)
+                print('\tintermediate : ', y.get_shape())
+                y = tf.layers.conv2d(y, 2 * filters, **conv_args)
+                y = tf.layers.batch_normalization(y, **bn_args)
+                print('\tintermediate : ', y.get_shape())
+                y = tf.layers.conv2d(y, 2 * filters, **conv_args)
+                y = tf.layers.batch_normalization(y, **bn_args)
+                print('\tintermediate : ', y.get_shape())
+                y = tf.layers.conv2d(y, 2 * filters, **conv_args)
+                y = tf.layers.batch_normalization(y, **bn_args)
+                print('\tintermediate : ', y.get_shape())
+                y = tf.layers.max_pooling2d(y, 2, 2)
+                print('\tintermediate : ', y.get_shape())
+                y = tf.layers.conv2d(y, 4 * filters, kernel_size=3, activation=tf.nn.leaky_relu, padding='valid')
+                y = tf.layers.batch_normalization(y, **bn_args)
+                print('\tintermediate : ', y.get_shape())
+                y = tf.layers.conv2d(y, 2 * filters, kernel_size=1, activation=tf.nn.leaky_relu, padding='same')
+                y = tf.layers.batch_normalization(y, **bn_args)
+                print('\tintermediate : ', y.get_shape())
+                y = tf.layers.conv2d(y, 1 * filters, kernel_size=1, activation=tf.nn.leaky_relu, padding='same')
+                y = tf.layers.batch_normalization(y, **bn_args)
+                print('\tintermediate : ', y.get_shape())
+                y = tf.reduce_mean(y, [1, 2])  # (b, 6, 6, 128) -> (b, 128)
+                logits = tf.layers.dense(y, self.nclass)
+            print('CNN13 classifier, output : ', logits.get_shape())
+            return logits
 
 
 class ConvNet(ClassifySemi):
@@ -77,15 +78,16 @@ class ConvNet(ClassifySemi):
         del kwargs
         conv_args = dict(kernel_size=3, activation=tf.nn.leaky_relu, padding='same')
 
-        with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
-            y = tf.layers.conv2d(x, filters, **conv_args)
-            for scale in range(scales):
-                y = tf.layers.conv2d(y, filters << scale, **conv_args)
-                y = tf.layers.conv2d(y, filters << (scale + 1), **conv_args)
-                y = tf.layers.average_pooling2d(y, 2, 2)
-            y = tf.layers.conv2d(y, self.nclass, 3, padding='same')
-            logits = tf.reduce_mean(y, [1, 2])
-        return logits
+        with tf.name_scope('ConvNet'):
+            with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
+                y = tf.layers.conv2d(x, filters, **conv_args)
+                for scale in range(scales):
+                    y = tf.layers.conv2d(y, filters << scale, **conv_args)
+                    y = tf.layers.conv2d(y, filters << (scale + 1), **conv_args)
+                    y = tf.layers.average_pooling2d(y, 2, 2)
+                y = tf.layers.conv2d(y, self.nclass, 3, padding='same')
+                logits = tf.reduce_mean(y, [1, 2])
+            return logits
 
 
 class ResNet(ClassifySemi):
@@ -115,22 +117,21 @@ class ResNet(ClassifySemi):
 
             return x0 + x
 
-        with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
-            y = tf.layers.conv2d((x - self.dataset.mean) / self.dataset.std, 16, 3, **conv_args(3, 16))
-            
-            for scale in range(scales):
-                y = residual(y, filters << scale, stride=2 if scale else 1, activate_before_residual=scale == 0)
-                for i in range(repeat - 1):
-                    y = residual(y, filters << scale)
+        with tf.name_scope('ResNetSmall'):
+            with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
+                y = tf.layers.conv2d((x - self.dataset.mean) / self.dataset.std, 16, 3, **conv_args(3, 16))
+                
+                for scale in range(scales):
+                    y = residual(y, filters << scale, stride=2 if scale else 1, activate_before_residual=scale == 0)
+                    for i in range(repeat - 1):
+                        y = residual(y, filters << scale)
 
-            y = leaky_relu(tf.layers.batch_normalization(y, **bn_args))
-            y = tf.reduce_mean(y, [1, 2])
-            logits = tf.layers.dense(y, self.nclass, kernel_initializer=tf.glorot_normal_initializer())
+                y = leaky_relu(tf.layers.batch_normalization(y, **bn_args))
+                y = tf.reduce_mean(y, [1, 2])
+                logits = tf.layers.dense(y, self.nclass, kernel_initializer=tf.glorot_normal_initializer())
 
-        print('ResNet classifier, output : ', logits.get_shape())
-        return logits
-
-
+            print('ResNet classifier, output : ', logits.get_shape())
+            return logits
 
 
 class ResNet18(ClassifySemi):
@@ -164,39 +165,40 @@ class ResNet18(ClassifySemi):
         # if 'record_feature' in kwargs and kwargs['record_feature']:
         #     self.features = []
 
-        with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
+        with tf.name_scope('ResNet'):
+            with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
 
-            y = tf.layers.conv2d((x - self.dataset.mean) / self.dataset.std, 64, 7, strides=2, **conv_args(7, 64))
-            y = tf.layers.max_pooling2d(y, 2, 2)
-            print('\tmax_pooling2d, output : ', y.get_shape())
+                y = tf.layers.conv2d((x - self.dataset.mean) / self.dataset.std, 64, 7, strides=2, **conv_args(7, 64))
+                y = tf.layers.max_pooling2d(y, 2, 2)
+                print('\tmax_pooling2d, output : ', y.get_shape())
 
 
-            # if 'record_feature' in kwargs and kwargs['record_feature']:
-            #     self.features.append(y)
-
-            for scale in range(scales):
-                y = residual(y, filters << scale, stride=(2 if scale else 1), activate_before_residual=(scale == 0))
-                for i in range(repeat - 1):
-                    y = residual(y, filters << scale)
-                    
                 # if 'record_feature' in kwargs and kwargs['record_feature']:
                 #     self.features.append(y)
-            y = lrelu(tf.layers.batch_normalization(y, **bn_args))
-            print('\treduce_mean, input : ', y.get_shape())
-            y = tf.reduce_mean(y, [1, 2])
-            
+
+                for scale in range(scales):
+                    y = residual(y, filters << scale, stride=(2 if scale else 1), activate_before_residual=(scale == 0))
+                    for i in range(repeat - 1):
+                        y = residual(y, filters << scale)
+                        
+                    # if 'record_feature' in kwargs and kwargs['record_feature']:
+                    #     self.features.append(y)
+                y = lrelu(tf.layers.batch_normalization(y, **bn_args))
+                print('\treduce_mean, input : ', y.get_shape())
+                y = tf.reduce_mean(y, [1, 2])
+                
+                # if 'record_feature' in kwargs and kwargs['record_feature']:
+                #     self.features.append(y)
+                logits = tf.layers.dense(y, self.nclass, kernel_initializer=tf.glorot_normal_initializer())
+
+            print('ResNet classifier, output : ', logits.get_shape())
+
+
             # if 'record_feature' in kwargs and kwargs['record_feature']:
-            #     self.features.append(y)
-            logits = tf.layers.dense(y, self.nclass, kernel_initializer=tf.glorot_normal_initializer())
+            #     self.logits = logits
 
-        print('ResNet classifier, output : ', logits.get_shape())
-
-
-        # if 'record_feature' in kwargs and kwargs['record_feature']:
-        #     self.logits = logits
-
-        del kwargs
-        return logits
+            del kwargs
+            return logits
 
 
 

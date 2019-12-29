@@ -91,7 +91,7 @@ def _load_miniimagenet():
             var_list.append(np.var(img, axis=(0, 1)))
 
     img_mean = np.mean(np.array(mean_list), axis=0)
-    img_var = np.sqrt(np.mean(np.array(var_list), axis=0))
+    img_var = np.mean(np.array(var_list), axis=0)
 
     return {
         'train' : {

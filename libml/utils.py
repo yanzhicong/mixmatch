@@ -203,3 +203,10 @@ def para_cat(fn, *args):
     if isinstance(outputs[0], (tuple, list)):
         return [tf.concat(x, axis=0) for x in zip(*outputs)]
     return tf.concat(outputs, axis=0)
+
+
+def get_exponential_learning_rate(lr, global_epoch, start_epoch, total_epochs, decay_rate):
+    return tf.train.exponential_decay(
+			lr,
+			tf.maximum(0, global_epoch - start_epoch),
+			tf.maximum(1, total_epochs - start_epoch), decay_rate)

@@ -35,7 +35,6 @@ class MixupSL(Mixup):
     def model(self, lr, wd, ema, **kwargs):
         hwc = [self.dataset.height, self.dataset.width, self.dataset.colors]
 
-
         x_in = tf.placeholder(tf.float32, [None] + hwc, 'x')
         y_in = tf.placeholder(tf.float32, [None] + hwc, 'y')
         l_in = tf.placeholder(tf.int32, [None], 'labels')
@@ -52,7 +51,6 @@ class MixupSL(Mixup):
 
         loss_xe = tf.nn.softmax_cross_entropy_with_logits_v2(labels=labels_x, logits=logits_x)
         loss_xe = tf.reduce_mean(loss_xe)
-
 
 
         train_op = tf.train.AdamOptimizer(lr).minimize(loss_xe, colocate_gradients_with_ops=True)
@@ -84,17 +82,20 @@ def main(argv):
         os.path.join(FLAGS.train_dir, dataset.name),
         dataset,
         lr=FLAGS.lr,
+        
         wd=FLAGS.wd,
         arch=FLAGS.arch,
         batch=FLAGS.batch,
         nclass=dataset.nclass,
         ema=FLAGS.ema,
         beta=FLAGS.beta,
-
+        epochs=FLAGS.epochs,
         scales=FLAGS.scales or (log_width - 2),
         filters=FLAGS.filters,
         repeat=FLAGS.repeat)
-    model.train(FLAGS.train_kimg << 10, FLAGS.report_kimg << 10)
+
+    # train model in supervised setting
+    model.train(FLAGS.epochs, FLAGS.imgs_per_epoch // FLAGS.batch, ssl=False)
 
 
 if __name__ == '__main__':
@@ -108,6 +109,8 @@ if __name__ == '__main__':
     FLAGS.set_default('dataset', 'cifar10.3@4000-5000')
     FLAGS.set_default('batch', 64)
     FLAGS.set_default('lr', 0.002)
-    FLAGS.set_default('train_kimg', 1 << 16)
+    FLAGS.set_default('lr_decay_rate', 0.001)
+    FLAGS.set_default('epochs', 100)
+    FLAGS.set_default('decay_start_epoch', 20)
+    FLAGS.set_default('imgs_per_epoch', 50000)
     app.run(main)
-
