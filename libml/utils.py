@@ -210,3 +210,18 @@ def get_exponential_learning_rate(lr, global_epoch, start_epoch, total_epochs, d
 			lr,
 			tf.maximum(0, global_epoch - start_epoch),
 			tf.maximum(1, total_epochs - start_epoch), decay_rate)
+
+
+def cal_entropy(pred):
+    Z = np.maximum(pred, 5e-10)
+    nb_classes = Z.shape[1]
+    Z = Z / Z.sum(axis=1, keepdims=True)
+    Z = - 1.0 *  (Z * np.log(Z)).sum(axis=1)
+    W = 1.0 - Z / np.log(float(nb_classes))
+    return W
+
+
+def cal_entropy_weighed_acc(labels, predicted):
+    weights = cal_entropy(predicted)
+    return ((predicted.argmax(1) == labels).astype(np.float) * weights).sum() / weights.sum() * 100
+

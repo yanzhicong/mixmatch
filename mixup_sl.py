@@ -31,7 +31,6 @@ from mixup import Mixup
 
 class MixupSL(Mixup):
 
-
     def model(self, lr, wd, ema, **kwargs):
         hwc = [self.dataset.height, self.dataset.width, self.dataset.colors]
 

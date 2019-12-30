@@ -61,3 +61,5 @@ DATASETS.update(
     [TxtDataSet.creator('miniimagenet', seed, label, valid, [argument_miniimagenet, stack_augment(argument_miniimagenet)], width=84, height=84, nclass=100, do_memoize=False)
                     for seed, label, valid in
                         itertools.product(range(6), [40, 100], [1, 50])])
+
+

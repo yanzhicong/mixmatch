@@ -23,6 +23,7 @@ from absl import flags
 from easydict import EasyDict
 from tqdm import trange
 import threading
+from collections import OrderedDict
 
 from libml import data, utils
 
@@ -147,12 +148,10 @@ class ClassifySemi(Model):
     def __init__(self, train_dir: str, dataset: data.DataSet, nclass: int, **kwargs):
         self.nclass = nclass
         self.train_step_monitor_summary = None
-        # self.mutex = threading.Lock()
 
         Model.__init__(self, train_dir, dataset, nclass=nclass, **kwargs)
 
     def train_step(self, train_session, data_labeled, data_unlabeled=None, summary=None):
-
         if data_unlabeled is not None:
             x, y = self.session.run([data_labeled, data_unlabeled])
             if summary is not None:
@@ -177,6 +176,17 @@ class ClassifySemi(Model):
                 self.tmp.step = train_session.run([self.ops.train_op, self.ops.update_step],
                                                 feed_dict={self.ops.x: x['image'],
                                                             self.ops.label: x['label']})[1]
+
+    def on_epoch_start(self, epoch_ind, epochs):
+        pass
+
+    def on_epoch_end(self, epoch_ind, epochs):
+        pass
+
+    def on_training_interrupted(self, epoch_ind, epochs):
+        pass
+
+
 
     def train(self, epochs, steps_per_epoch, summary_interval=100, ssl=True):
         if FLAGS.eval_ckpt:
@@ -213,13 +223,12 @@ class ClassifySemi(Model):
                 self.session.run([self.train_labeled[0], self.train_unlabeled[0]])
             else:
                 self.session.run([self.train_labeled[0],])
-            
-            # while self.tmp.step < train_nimg:
+
 
             for epoch_ind in range(epochs):
-
                 self.session.run(self.epoch.assign(epoch_ind))
-                print(self.session.run(self.learning_rate))
+
+                self.on_epoch_start(epoch_ind, epochs)
 
                 loop = trange(0, steps_per_epoch*batch, batch,
                               leave=False, unit='img', unit_scale=batch,
@@ -238,6 +247,7 @@ class ClassifySemi(Model):
                 s, st = self.session.run([self.summary, self.step])
                 self.summary_writer.add_summary(s, global_step=st)
 
+                self.on_epoch_end(epoch_ind, epochs)
 
             while self.tmp.print_queue:
                 print(self.tmp.print_queue.pop(0))
@@ -267,33 +277,22 @@ class ClassifySemi(Model):
         print('%16s %8s %8s %8s' % (('tuned_raw',) + tuple('%.2f' % x for x in tuned_raw)))
         print('%16s %8s %8s %8s' % (('tuned_ema',) + tuple('%.2f' % x for x in tuned_ema)))
 
-
-    def eval_stats(self, batch=None, feed_extra=None, classify_op=None):
+    
+    def eval_stats(self, eval_dict=None, batch=None, feed_extra=None, classify_op=None):
         """Evaluate model on train, valid and test."""
         batch = batch or FLAGS.batch
         classify_op = self.ops.classify_op if classify_op is None else classify_op
         accuracies = []
         weighted_accuracies = []
 
-        subset_list = ['train_labeled', 'valid', 'test']
-        dataset_list = [self.eval_labeled, self.valid, self.test]
+        if eval_dict is None:
+            eval_dict = OrderedDict(
+                train_labeled=self.eval_labeled,
+                valid=self.valid,
+                test=self.test)
 
-        # def cal_entropy(pred):
-        #     return np.
-
-        def cal_entropy(pred):
-            Z = np.maximum(pred, 5e-10)
-            nb_classes = Z.shape[1]
-            Z = Z / Z.sum(axis=1, keepdims=True)
-            Z = - 1.0 *  (Z * np.log(Z)).sum(axis=1)
-            W = 1.0 - Z / np.log(float(nb_classes))
-            return W
-
-
-        # with self.mutex:
-        for subset, dataset in zip(subset_list, dataset_list):
+        for subset, dataset in eval_dict.items():
             predicted = []
-            weights = []
             labels = []
 
             self.session.run([dataset[0]])
@@ -306,19 +305,16 @@ class ClassifySemi(Model):
                             self.ops.x: v['image'],
                             **(feed_extra or {})
                         })
-
-                    predicted.append(p.argmax(1))
+                    predicted.append(p)
                     labels.append(v['label'])
-                    weights.append(cal_entropy(p))
-
+                    
                 except tf.errors.OutOfRangeError:
                     break
             predicted = np.concatenate(predicted, axis=0)
             labels = np.concatenate(labels, axis=0)
-            weights = np.concatenate(weights, axis=0)
 
-            accuracies.append((predicted == labels).mean() * 100)
-            weighted_accuracies.append(((predicted == labels).astype(np.float) * weights).sum() / weights.sum() * 100)
+            accuracies.append((predicted.argmax(1) == labels).mean() * 100)
+            weighted_accuracies.append(utils.cal_entropy_weighed_acc(labels, predicted))
 
         self.train_print('kimg %-5d  accuracy train/valid/test  %.2f  %.2f  %.2f  weighted accuracy train/valid/test  %.2f  %.2f  %.2f' %
                         tuple([self.tmp.step >> 10] + accuracies + weighted_accuracies))

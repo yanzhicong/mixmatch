@@ -34,46 +34,45 @@ flags.DEFINE_string('dataset', 'cifar10.1@4000-5000', 'Data to train on.')
 flags.DEFINE_integer('para_parse', 4, 'Parallel parsing.')
 flags.DEFINE_integer('para_augment', 4, 'Parallel augmentation.')
 flags.DEFINE_integer('shuffle', 8192, 'Size of dataset shuffling.')
+flags.DEFINE_integer('num_pseudo_label_channels', 2, 'Size of dataset shuffling.')
 flags.DEFINE_string('p_unlabeled', '', 'Probability distribution of unlabeled.')
 flags.DEFINE_bool('whiten', False, 'Whether to normalize images.')
 FLAGS = flags.FLAGS
 
 
-def record_parse(serialized_example):
-    features = tf.parse_single_example(
-        serialized_example,
-        features={'image': tf.FixedLenFeature([], tf.string),
-                  'label': tf.FixedLenFeature([], tf.int64)})
-    image = tf.image.decode_image(features['image'])
-    image = tf.cast(image, tf.float32) * (2.0 / 255) - 1.0
-    label = features['label']
-    return dict(image=image, label=label)
 
+def record_parse(dataset: tf.data.Dataset) -> tf.data.Dataset:
+    def record_parse_internal(serialized_example):
+        return tf.parse_single_example(
+            serialized_example,
+            features={'image': tf.FixedLenFeature([], tf.string),
+                    'label': tf.FixedLenFeature([], tf.int64)})
+    return dataset.map(record_parse_internal)
 
-def default_parse(dataset: tf.data.Dataset, parse_fn=record_parse) -> tf.data.Dataset:
+def default_parse(dataset: tf.data.Dataset) -> tf.data.Dataset:
+    def record_parse(serialized_example):
+        features = tf.parse_single_example(
+            serialized_example,
+            features={'image': tf.FixedLenFeature([], tf.string),
+                    'label': tf.FixedLenFeature([], tf.int64)})
+        image = tf.image.decode_image(features['image'])
+        image = tf.cast(image, tf.float32) * (2.0 / 255) - 1.0
+        label = features['label']
+        return dict(image=image, label=label)
     para = 4 * max(1, len(utils.get_available_gpus())) * FLAGS.para_parse
-    return dataset.map(parse_fn, num_parallel_calls=para)
+    return dataset.map(record_parse, num_parallel_calls=para)
 
 
-# def default_parse2(dataset: tf.data.Dataset, parse_fn=record_parse) -> tf.data.Dataset:
-#     para = 4 * max(1, len(utils.get_available_gpus())) * FLAGS.para_parse
-#     return dataset.map(parse_fn, num_parallel_calls=para)
+def random_split_ind(label_list, num_valid_per_class):
+    label_set = np.unique(label_list)
+    valid_ind_list = []
+    for l in label_set:
+        valid_ind_list += list(np.random.choice(np.where(label_list==l)[0], size=num_valid_per_class, replace=False))
+    valid_ind_list.sort()
+    return valid_ind_list
 
 
-def dataset(filenames: list) -> tf.data.Dataset:
-    filenames = sorted(sum([glob.glob(x) for x in filenames], []))
-    if not filenames:
-        raise ValueError('Empty dataset, did you mount gcsfuse bucket?')
-    return tf.data.TFRecordDataset(filenames)
-
-
-def txt_dataset_imglist_w_label(filenames: list, split_valid:int=0) -> tf.data.Dataset:
-    """
-        from txt file to tf.data.Dataset
-        if split_valid == 0, return only one dataset, otherwise will return dataset and valid_dataset
-    """
-
-    print(filenames)
+def extract_image_and_label_list(filenames):
     filenames = sorted(sum([glob.glob(x) for x in filenames], []))
     if not filenames:
         raise ValueError('Empty dataset, did not find any txt file')
@@ -87,65 +86,49 @@ def txt_dataset_imglist_w_label(filenames: list, split_valid:int=0) -> tf.data.D
                 if len(splits) == 2:
                     image_list.append(splits[0].encode('utf-8'))
                     label_list.append(int(splits[1]))
+    return {
+        'images':image_list, 
+        'labels':label_list
+    }
 
-    def cv2_imread(filepath):
-        filein = np.fromfile(filepath.decode('utf-8'), dtype=np.uint8)
-        cv_img = cv2.imdecode(filein, cv2.IMREAD_COLOR).astype(np.float32) / 255.0
-        return cv_img
 
-    para = 4 * max(1, len(utils.get_available_gpus())) * FLAGS.para_parse
+def extract_tf_dataset(dataset):
+    data = []
+    with tf.Session(config=utils.get_config()) as session:
+        dataset = dataset.prefetch(16)
+        it = dataset.make_one_shot_iterator().get_next()
+        try:
+            while 1:
+                data.append(session.run(it))
+        except tf.errors.OutOfRangeError:
+            pass
+    images = [x['image'] for x in data]
+    labels = [x['label'] for x in data]
+    return {
+        'images': images,
+        'labels': labels,
+    }
 
-    def list_to_dataset(i_list, l_list, num_parallel_calls):
-        dataset = tf.data.Dataset.from_tensor_slices((i_list, l_list))
-        dataset = dataset.map(map_func=lambda img_filepath, label : 
-                                    {'image' : tf.py_func(func=cv2_imread, inp=[img_filepath,], Tout=tf.float32), 
-                                    'label' : label}, num_parallel_calls=num_parallel_calls)
-        return dataset
 
-    def ind_filter(item_list, ind_list):
+def split_data_by_ind(data_dict, ind_list):
+
+    inc_data = {}
+    exc_data = {}
+    
+    def ind_include_filter(data_list, ind_list):
         ind_list.sort()
-        return [item_list[ind] for ind in ind_list]
+        return [data_list[ind] for ind in ind_list]
         
-    def ind_exclude_filter(item_list, ind_list):
-        ind_list = list(set(np.arange(len(item_list))) - set(ind_list))
+    def ind_exclude_filter(data_list, ind_list):
+        ind_list = list(set(np.arange(len(data_list))) - set(ind_list))
         ind_list.sort()
-        return [item_list[ind] for ind in ind_list]
-        
-    if split_valid == 0:
-        return list_to_dataset(image_list, label_list, para)
-    else:
-        label_set = np.unique(label_list)
-        valid_ind_list = []
-        for l in label_set:
-            valid_ind_list += list(np.random.choice(np.where(label_list==l)[0], size=split_valid, replace=False))
-        
-        return list_to_dataset(ind_exclude_filter(image_list, valid_ind_list), ind_exclude_filter(label_list, valid_ind_list), para),          \
-               list_to_dataset(ind_filter(image_list, valid_ind_list), ind_filter(label_list, valid_ind_list), para)
+        return [data_list[ind] for ind in ind_list]
 
+    for field in ['images', 'labels']:
+        inc_data[field] = ind_include_filter(data_dict[field], ind_list)
+        exc_data[field] = ind_exclude_filter(data_dict[field], ind_list)
 
-
-# def txt_dataset_imglist_wo_label(filenames: list) -> tf.data.Dataset:
-#     filenames = sorted(sum([glob.glob(x) for x in filenames], []))
-#     if not filenames:
-#         raise ValueError('Empty dataset, did you mount gcsfuse bucket?')
-#     image_list = []
-#     for filename in filenames:
-#         with open(filename, 'r') as infile:
-#             for line in infile:
-#                 splits = line[:-1].split(',')
-#                 if len(splits) == 2:
-#                     image_list.append(splits[0].encode('utf-8'))
-#                     label_list.append(int(splits[1]))
-#     def cv2_imread(filepath):
-#         filein = np.fromfile(filepath, dtype=np.uint8)
-#         cv_img = cv2.imdecode(filein, cv2.IMREAD_COLOR)
-#         return cv_img
-#     dataset = tf.data.Dataset.from_tensor_slices(image_list)
-#     dataset2 = tf.data.Dataset.from_tensor_slices(image_list)
-
-#     dataset = dataset.map(map_func=l)
-#     dataset = tf.data.Dataset.zip([dataset, dataset2])
-
+    return inc_data, exc_data
 
 
 def memoize(dataset: tf.data.Dataset) -> tf.data.Dataset:
@@ -175,7 +158,6 @@ def memoize(dataset: tf.data.Dataset) -> tf.data.Dataset:
 
 def augment_mirror(x):
     return tf.image.random_flip_left_right(x)
-
 
 def augment_shift(x, w):
     y = tf.pad(x, [[w] * 2, [w] * 2, [0] * 2], mode='REFLECT')
@@ -209,190 +191,222 @@ def compute_mean_std(data: tf.data.Dataset):
     return mean, std
 
 
-class DataSet:
-    def __init__(self, name, train_labeled, train_unlabeled, test, valid, eval_labeled, eval_unlabeled,
-                 height=32, width=32, colors=3, nclass=10, mean=0, std=1, p_labeled=None, p_unlabeled=None):
-        self.name = name
-        self.train_labeled = train_labeled
-        self.train_unlabeled = train_unlabeled
-        self.eval_labeled = eval_labeled
-        self.eval_unlabeled = eval_unlabeled
-        self.test = test
-        self.valid = valid
-        self.height = height
-        self.width = width
-        self.colors = colors
-        self.nclass = nclass
-        self.mean = mean
-        self.std = std
-        self.p_labeled = p_labeled
-        self.p_unlabeled = p_unlabeled
+class DataSource:
+    def __init__(self, filename=None):
+        self.datasource=None
+        self.load_data(filename)
+
+    def load_data(self, filename):
+        self.filename = filename
+        if filename is not None:
+            assert self.filename.split('.')[-1] in ['tfrecord', 'txt']
+            if self.filename.endswith('tfrecord'):
+                self.load_tf_record_data_source()
+            elif self.filename.endswith('txt'):
+                self.load_txt_data_source()
+
+    @property
+    def size(self):
+        return len(self.datasource['images'])
+
+    @property
+    def labels(self):
+        return self.datasource['labels']
+
+    @property
+    def data_type(self):
+        return self.filename.split('.')[-1]
+
+    def load_tf_record_data_source(self):
+        def dataset(filenames: list) -> tf.data.Dataset:
+            filenames = sorted(sum([glob.glob(x) for x in filenames], []))
+            if not filenames:
+                raise ValueError('Empty dataset, did you mount gcsfuse bucket?')
+            return tf.data.TFRecordDataset(filenames)
+        self.datasource = extract_tf_dataset(record_parse(dataset([self.filename])))
+        # pass
+
+    def load_txt_data_source(self):
+        self.datasource = extract_image_and_label_list([self.filename])
+
+    def split_by_indices(self, indices):
+        a = DataSource()
+        b = DataSource()
+        a.filename = self.filename
+        b.filename = self.filename
+        a.datasource, b.datasource = split_data_by_ind(self.datasource, indices)
+        return a, b
+        
+    def create_pesudo_labels(self):
+        if 'pesudo_labels' not in self.datasource:
+            self.datasource['pseudo_labels'] = tf.get_variable('pseudo_labels', shape=[self.size, FLAGS.num_pseudo_label_channels], dtype=tf.float32, initializer=tf.zeros_initializer())
+
+    def create_tf_dataset(self, num_parallel=1):
+        def cv2_imread(filepath):
+            filein = np.fromfile(filepath.decode('utf-8'), dtype=np.uint8)
+            cv_img = cv2.imdecode(filein, cv2.IMREAD_COLOR).astype(np.float32) / 255.0
+            return cv_img
+
+        def to_dataset(img_proc_func, num_parallel=1):
+            data_list = [self.datasource['images'], self.datasource['labels']]
+            if 'pseudo_labels' in self.datasource:
+                data_list.append(self.datasource['pseudo_labels'])
+            dataset = tf.data.Dataset.from_tensor_slices(tuple(data_list))
+
+            if 'pseudo_labels' in self.datasource:
+                dataset = dataset.map(map_func=lambda img, label, plabel: 
+                                            {'image' : img_proc_func(img), 
+                                            'label' : label,
+                                            'pseudo_label' : plabel}, num_parallel_calls=num_parallel)
+            else:
+                dataset = dataset.map(map_func=lambda img, label: 
+                                            {'image' : img_proc_func(img), 
+                                            'label' : label}, num_parallel_calls=num_parallel)
+            return dataset
+
+        if self.data_type == 'txt':
+            return to_dataset(lambda x : tf.py_func(cv2_imread, inp=[x], Tout=tf.float32), num_parallel=num_parallel)
+        elif self.data_type == 'tfrecord':
+            return to_dataset(lambda x : tf.cast(tf.image.decode_image(x), tf.float32) / 255.0 , num_parallel=num_parallel)
+
+
+
+
+class DataSet(object):
+
+    def __init__(self, name, seed, label, valid, full_dataset=False):
+        
+        fullname = '.%d@%d' % (seed, label)
+        self.root = os.path.join(DATA_DIR, 'SSL', name + fullname)
+        self.pseudo_labels = None
+
+        if full_dataset:
+            self.labeled_data_path = os.path.join(DATA_DIR, '%s-train.tfrecord' % name)
+            self.unlabeled_data_path = os.path.join(DATA_DIR, '%s-train.tfrecord' % name)
+        else:
+            self.labeled_data_path = self.root + '-labeled.tfrecord'
+            self.unlabeled_data_path = self.root + '-unlabeled.tfrecord'
+        self.test_data_path = os.path.join(DATA_DIR, '%s-test.tfrecord' % name)
+
+
+    def assign_plabel(self, sess, plabel):
+        if self.pseudo_labels is not None:
+            sess.run(self.pseudo_labels.assign(plabel))
+
 
     @classmethod
     def creator(cls, name, seed, label, valid, augment, parse_fn=default_parse, do_memoize=True, colors=3,
-                nclass=10, height=32, width=32, name_suffix=''):
+                nclass=10, height=32, width=32, name_suffix='', full_dataset=False):
+
         if not isinstance(augment, list):
             augment = [augment] * 2
+
+        fn = memoize if do_memoize else lambda x: x.repeat().shuffle(FLAGS.shuffle)
+        fullname = '.%d@%d' % (seed, label)
+        dataset_name = name + name_suffix + fullname + '-' + str(valid) if not full_dataset else name + name_suffix + '-' + str(valid)
+        
+        def create(split_indices=None, use_pseudo_label=False):
+            p_labeled = p_unlabeled = None
+            para1 = max(1, len(utils.get_available_gpus())) * FLAGS.para_augment
+            para2 = 4 * max(1, len(utils.get_available_gpus())) * FLAGS.para_parse
+
+            instance = cls(name, seed, label, valid, full_dataset=full_dataset)
+
+            if FLAGS.p_unlabeled:
+                sequence = FLAGS.p_unlabeled.split(',')
+                p_unlabeled = np.array(list(map(float, sequence)), dtype=np.float32)
+                p_unlabeled /= np.max(p_unlabeled)
+
+            with tf.name_scope('DatasetCreator'):
+    
+                labeled_data, unlabeled_data, test_data = map(lambda x:DataSource(x), [instance.labeled_data_path, instance.unlabeled_data_path, 
+                            instance.test_data_path])
+
+                if split_indices is None:
+                    split_indices = random_split_ind(unlabeled_data.labels, num_valid_per_class=valid)
+
+                # 从unlabeled_data中分离出valid_data
+                valid_data, unlabeled_data = unlabeled_data.split_by_indices(split_indices)
+
+
+                if full_dataset:
+                    # 使用full_dataset时，labeled_data与unlabeled_data相同，将valid_data从labeled_data中分离出来
+                    _, labeled_data = labeled_data.split_by_indices(split_indices)
+
+                
+                if use_pseudo_label:
+                    unlabeled_data.create_pesudo_labels()
+
+                instance.__dict__.update(dict(
+                    labeled_data=labeled_data,
+                    unlabeled_data=unlabeled_data,
+                    valid_data=valid_data,
+                    test_data=test_data
+                ))
+
+
+                # build tf dataset pipeline
+                train_labeled, train_unlabeled, eval_labeled, eval_unlabeled, eval_valid, test = map(lambda x:x.create_tf_dataset(para2), [labeled_data, unlabeled_data] * 2 + [valid_data, test_data])
+
+                train_labeled = fn(train_labeled).map(augment[0], para1)
+                train_unlabeled = fn(train_unlabeled).map(augment[1], para1)
+
+                if FLAGS.whiten:
+                    mean_var = json.loads(open(os.path.join(DATA_DIR, '%s-meanvar.json' % name), 'r').read())
+                    mean = np.array(mean_var['mean'])
+                    std = np.array(mean_var['var'])
+                else:
+                    mean, std = 0, 1
+
+                instance.__dict__.update(dict(
+                    name=dataset_name,
+                    train_labeled=train_labeled,
+                    train_unlabeled=train_unlabeled,
+                    eval_labeled=eval_labeled,
+                    eval_unlabeled=eval_unlabeled,
+                    valid=eval_valid,
+                    test=test,
+                    nclass=nclass, colors=colors, p_labeled=p_labeled, p_unlabeled=p_unlabeled,
+                    height=height, width=width, mean=mean, std=std
+                ))
+
+                if use_pseudo_label:
+                    instance.__dict__.update(dict(
+                        pseudo_labels=unlabeled_data.datasource['pseudo_labels'],
+                    ))
+
+                return instance
+
+        return dataset_name, create
+
+
+class TxtDataSet(DataSet):
+
+    def __init__(self, name, seed, label, valid, full_dataset=False):
+        
         fullname = '.%d@%d' % (seed, label)
         root = os.path.join(DATA_DIR, 'SSL', name + fullname)
-        fn = memoize if do_memoize else lambda x: x.repeat().shuffle(FLAGS.shuffle)
 
-        def create():
-            p_labeled = p_unlabeled = None
-            para = max(1, len(utils.get_available_gpus())) * FLAGS.para_augment
+        if full_dataset:
+            self.labeled_data_path = os.path.join(DATA_DIR, '%s-train.txt' % name)
+            self.unlabeled_data_path = os.path.join(DATA_DIR, '%s-train.txt' % name)
+        else:
+            self.labeled_data_path = root + '-labeled.txt'
+            self.unlabeled_data_path = root + '-unlabeled.txt'
+        self.test_data_path = os.path.join(DATA_DIR, '%s-test.txt' % name)
 
-            if FLAGS.p_unlabeled:
-                sequence = FLAGS.p_unlabeled.split(',')
-                p_unlabeled = np.array(list(map(float, sequence)), dtype=np.float32)
-                p_unlabeled /= np.max(p_unlabeled)
-
-            train_labeled = parse_fn(dataset([root + '-label.tfrecord']))
-            train_unlabeled = parse_fn(dataset([root + '-unlabel.tfrecord']).skip(valid))
-            if FLAGS.whiten:
-                mean, std = compute_mean_std(train_labeled.concatenate(train_unlabeled))
-            else:
-                mean, std = 0, 1
-
-            return cls(name + name_suffix + fullname + '-' + str(valid),
-                       train_labeled=fn(train_labeled).map(augment[0], para),
-                       train_unlabeled=fn(train_unlabeled).map(augment[1], para),
-                       eval_labeled=parse_fn(dataset([root + '-label.tfrecord'])),
-                       eval_unlabeled=parse_fn(dataset([root + '-unlabel.tfrecord']).skip(valid)),
-                       valid=parse_fn(dataset([root + '-unlabel.tfrecord']).take(valid)),
-                       test=parse_fn(dataset([os.path.join(DATA_DIR, '%s-test.tfrecord' % name)])),
-                       nclass=nclass, colors=colors, p_labeled=p_labeled, p_unlabeled=p_unlabeled,
-                       height=height, width=width, mean=mean, std=std)
-
-        return name + name_suffix + fullname + '-' + str(valid), create
-
-
-
-class TxtDataSet:
-    def __init__(self, name, train_labeled, train_unlabeled, test, valid, eval_labeled, eval_unlabeled,
-                 height=32, width=32, colors=3, nclass=10, mean=0, std=1, p_labeled=None, p_unlabeled=None):
-        self.name = name
-        self.train_labeled = train_labeled
-        self.train_unlabeled = train_unlabeled
-        self.eval_labeled = eval_labeled
-        self.eval_unlabeled = eval_unlabeled
-        self.test = test
-        self.valid = valid
-        self.height = height
-        self.width = width
-        self.colors = colors
-        self.nclass = nclass
-        self.mean = mean
-        self.std = std
-        self.p_labeled = p_labeled
-        self.p_unlabeled = p_unlabeled
-
-    @classmethod
-    def creator(cls, name, seed, label, valid, augment, parse_fn=default_parse, do_memoize=True, colors=3,
-                nclass=10, height=32, width=32, name_suffix=''):
-        if not isinstance(augment, list):
-            augment = [augment] * 2
-        fullname = '.%d@%d' % (seed, label)
-        root = os.path.join(DATA_DIR, 'SSL', name + fullname)
-        fn = memoize if do_memoize else lambda x: x.repeat().shuffle(FLAGS.shuffle)
-
-        def create():
-            p_labeled = p_unlabeled = None
-            para = max(1, len(utils.get_available_gpus())) * FLAGS.para_augment
-
-            if FLAGS.p_unlabeled:
-                sequence = FLAGS.p_unlabeled.split(',')
-                p_unlabeled = np.array(list(map(float, sequence)), dtype=np.float32)
-                p_unlabeled /= np.max(p_unlabeled)
-
-            train_labeled = txt_dataset_imglist_w_label([root + '-labeled.txt'])
-            train_unlabeled, train_valid = txt_dataset_imglist_w_label([root + '-unlabeled.txt'], split_valid=valid)
-
-            eval_labeled = txt_dataset_imglist_w_label([root + '-labeled.txt'])
-            eval_unlabeled, eval_valid = txt_dataset_imglist_w_label([root + '-unlabeled.txt'], split_valid=valid)
-
-            test = txt_dataset_imglist_w_label([os.path.join(DATA_DIR, '%s-test.txt' % name)])
-
-
-            if FLAGS.whiten:
-                mean_var = json.loads(open(os.path.join(DATA_DIR, '%s-meanvar.json' % name), 'r').read())
-                mean = np.array(mean_var['mean'])
-                std = np.array(mean_var['var'])
-            else:
-                mean, std = 0, 1
-
-            return cls(name + name_suffix + fullname + '-' + str(valid),
-                       train_labeled=fn(train_labeled).map(augment[0], para),
-                       train_unlabeled=fn(train_unlabeled).map(augment[1], para),
-                       eval_labeled=eval_labeled,
-                       eval_unlabeled=eval_unlabeled,
-                       valid=eval_valid,
-                       test=test,
-                       nclass=nclass, colors=colors, p_labeled=p_labeled, p_unlabeled=p_unlabeled,
-                       height=height, width=width, mean=mean, std=std)
-
-        return name + name_suffix + fullname + '-' + str(valid), create
-
-
-
-    @classmethod
-    def full_creator(cls, name, valid, augment, parse_fn=default_parse, do_memoize=True, colors=3,
-                nclass=10, height=32, width=32, name_suffix=''):
-
-        if not isinstance(augment, list):
-            augment = [augment] * 2
-
-        fn = memoize if do_memoize else lambda x: x.repeat().shuffle(FLAGS.shuffle)
-
-        def create():
-            p_labeled = p_unlabeled = None
-            para = max(1, len(utils.get_available_gpus())) * FLAGS.para_augment
-
-            if FLAGS.p_unlabeled:
-                sequence = FLAGS.p_unlabeled.split(',')
-                p_unlabeled = np.array(list(map(float, sequence)), dtype=np.float32)
-                p_unlabeled /= np.max(p_unlabeled)
-
-            train_labeled = txt_dataset_imglist_w_label([os.path.join(DATA_DIR, '%s-train.txt' % name)])
-            train_unlabeled, train_valid = txt_dataset_imglist_w_label([os.path.join(DATA_DIR, '%s-train.txt' % name)], split_valid=valid)
-
-            eval_labeled = txt_dataset_imglist_w_label([os.path.join(DATA_DIR, '%s-train.txt' % name)])
-            eval_unlabeled, eval_valid = txt_dataset_imglist_w_label([os.path.join(DATA_DIR, '%s-train.txt' % name)], split_valid=valid)
-
-            test = txt_dataset_imglist_w_label([os.path.join(DATA_DIR, '%s-test.txt' % name)])
-
-
-            if FLAGS.whiten:
-                mean_var = json.loads(open(os.path.join(DATA_DIR, '%s-meanvar.json' % name), 'r').read())
-                mean = np.array(mean_var['mean'])
-                std = np.array(mean_var['var'])
-            else:
-                mean, std = 0, 1
-
-            return cls(name + name_suffix,
-                       train_labeled=fn(train_labeled).map(augment[0], para),
-                       train_unlabeled=fn(train_unlabeled).map(augment[1], para),
-                       eval_labeled=eval_labeled,
-                       eval_unlabeled=eval_unlabeled,
-                       valid=eval_valid,
-                       test=test,
-                       nclass=nclass, colors=colors, p_labeled=p_labeled, p_unlabeled=p_unlabeled,
-                       height=height, width=width, mean=mean, std=std)
-
-        return name + name_suffix + '-' + str(valid), create
-
-
-augment_stl10 = lambda x: dict(image=augment_shift(augment_mirror(x['image']), 12), label=x['label'])
-augment_cifar10 = lambda x: dict(image=augment_shift(augment_mirror(x['image']), 4), label=x['label'])
-augment_svhn = lambda x: dict(image=augment_shift(x['image'], 4), label=x['label'])
-argument_miniimagenet = lambda x: dict(image=augment_shift(augment_mirror(x['image']), 4), label=x['label'])
+augment_stl10 = lambda x: {k:v if k != 'image' else augment_shift(augment_mirror(x['image']), 12) for k, v in x.items()}
+augment_cifar10 = lambda x: {k:v if k != 'image' else augment_shift(augment_mirror(x['image']), 4) for k, v in x.items()}
+augment_svhn = lambda x: {k:v if k != 'image' else augment_shift(x['image'], 4) for k, v in x.items()}
+argument_miniimagenet = lambda x: {k:v if k != 'image' else augment_shift(augment_mirror(x['image']), 4) for k, v in x.items()}
 
 
 DATASETS = {}
-DATASETS.update([DataSet.creator('cifar10', seed, label, valid, augment_cifar10)
+DATASETS.update([DataSet.creator('cifar10', seed, label, valid, augment_cifar10, do_memoize=False)
                     for seed, label, valid in
                         itertools.product(range(6), [250, 500, 1000, 2000, 4000, 8000], [1, 5000])])
 
-DATASETS.update([DataSet.creator('cifar100', seed, label, valid, augment_cifar10, nclass=100)
+DATASETS.update([DataSet.creator('cifar100', seed, label, valid, augment_cifar10, nclass=100, do_memoize=False)
                     for seed, label, valid in
                         itertools.product(range(6), [10000], [1, 5000])])
 
@@ -412,5 +426,5 @@ DATASETS.update([TxtDataSet.creator('miniimagenet', seed, label, valid, argument
                     for seed, label, valid in
                         itertools.product(range(6), [40, 100], [1, 50])])
 
-DATASETS.update([TxtDataSet.full_creator('miniimagenet', valid, argument_miniimagenet, width=84, height=84, nclass=100, do_memoize=False)
+DATASETS.update([TxtDataSet.creator('miniimagenet', 0, 0, valid, argument_miniimagenet, width=84, height=84, nclass=100, do_memoize=False, full_dataset=True)
                     for valid in [1, 50]])

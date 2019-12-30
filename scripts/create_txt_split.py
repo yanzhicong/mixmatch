@@ -86,8 +86,8 @@ def main(argv):
         class_image_list = [fp for fp, l in zip(image_list, label_list) if l == class_name]
         
         class_label_image_list = list(np.random.choice(class_image_list, size=FLAGS.size, replace=False))
-        # class_unlabeled_image_list = [fp for fp in class_image_list if fp not in class_label_image_list]
-        class_unlabeled_image_list = class_image_list
+        class_unlabeled_image_list = [fp for fp in class_image_list if fp not in class_label_image_list]
+        # class_unlabeled_image_list = class_image_list
 
         labeled_image_list += class_label_image_list
         labeled_label_list += [class_name for _ in class_label_image_list]

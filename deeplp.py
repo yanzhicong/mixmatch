@@ -31,8 +31,10 @@ import tensorflow as tf
 
 FLAGS = flags.FLAGS
 
+from mixup import Mixup
 
-class MixMatch(models.MultiModel):
+
+class DeepLP(Mixup):
 
     def augment(self, x, l, beta, **kwargs):
         assert 0, 'Do not call.'

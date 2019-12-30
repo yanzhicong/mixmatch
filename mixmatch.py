@@ -144,7 +144,9 @@ def main(argv):
         scales=FLAGS.scales or (log_width - 2),
         filters=FLAGS.filters,
         repeat=FLAGS.repeat)
-    model.train(FLAGS.train_kimg << 10, FLAGS.report_kimg << 10, summary_interval=100)
+    # model.train(FLAGS.train_kimg << 10, FLAGS.report_kimg << 10, summary_interval=100)
+
+    model.train(FLAGS.epochs, FLAGS.imgs_per_epoch // FLAGS.batch)
     # model.train(train_nimg=FLAGS.train_kimg << 10, report_nimg=FLAGS.report_kimg)
 
 
@@ -159,6 +161,9 @@ if __name__ == '__main__':
     flags.DEFINE_integer('repeat', 4, 'Number of residual layers per stage.')
     FLAGS.set_default('dataset', 'cifar10.3@250-5000')
     FLAGS.set_default('batch', 64)
-    FLAGS.set_default('lr', 0.0002)
-    FLAGS.set_default('train_kimg', 1 << 16)
+    FLAGS.set_default('lr', 0.002)
+    FLAGS.set_default('lr_decay_rate', 0.001)
+    FLAGS.set_default('epochs', 100)
+    FLAGS.set_default('decay_start_epoch', 20)
+    FLAGS.set_default('imgs_per_epoch', 50000)
     app.run(main)

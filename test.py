@@ -7,7 +7,7 @@ from absl import app
 from absl import flags
 from easydict import EasyDict
 from libml import layers, utils, models
-from libml.data import DATASETS, txt_dataset_imglist_w_label
+from libml.data import DATASETS
 from libml.layers import MixMode
 from glob import glob
 
@@ -47,7 +47,7 @@ def get_config():
 def main(argv):
     del argv  # Unused.
     # assert FLAGS.nu == 2
-    dataset = DATASETS[FLAGS.dataset]()
+    dataset = DATASETS[FLAGS.dataset](use_pseudo_label=True)
     batch = 64
 
 
