@@ -27,6 +27,7 @@ from easydict import EasyDict
 from libml import layers, utils, models
 from libml.data_pair import DATASETS
 from libml.layers import MixMode
+from libml.extern import ClassifySemiWithPLabel
 import tensorflow as tf
 
 FLAGS = flags.FLAGS
@@ -34,22 +35,28 @@ FLAGS = flags.FLAGS
 from mixup import Mixup
 
 
-class DeepLP(Mixup):
+class DeepLP(ClassifySemiWithPLabel):
 
     def augment(self, x, l, beta, **kwargs):
         assert 0, 'Do not call.'
 
-    def guess_label(self, y, classifier, T, **kwargs):
-        del kwargs
-        logits_y = [classifier(yi, training=True) for yi in y]
-        logits_y = tf.concat(logits_y, 0)
-        # Compute predicted probability distribution py.
-        p_model_y = tf.reshape(tf.nn.softmax(logits_y), [len(y), -1, self.nclass])
-        p_model_y = tf.reduce_mean(p_model_y, axis=0)
-        # Compute the target distribution.
-        p_target = tf.pow(p_model_y, 1. / T)
-        p_target /= tf.reduce_sum(p_target, axis=1, keep_dims=True)
-        return EasyDict(p_target=p_target, p_model=p_model_y)
+    # def guess_label(self, y, classifier, T, **kwargs):
+    #     del kwargs
+    #     logits_y = [classifier(yi, training=True) for yi in y]
+    #     logits_y = tf.concat(logits_y, 0)
+    #     # Compute predicted probability distribution py.
+    #     p_model_y = tf.reshape(tf.nn.softmax(logits_y), [len(y), -1, self.nclass])
+    #     p_model_y = tf.reduce_mean(p_model_y, axis=0)
+    #     # Compute the target distribution.
+    #     p_target = tf.pow(p_model_y, 1. / T)
+    #     p_target /= tf.reduce_sum(p_target, axis=1, keep_dims=True)
+    #     return EasyDict(p_target=p_target, p_model=p_model_y)
+
+    def update_pseudo_label(self):
+        dataset = self.dataset.eval_unlabeled
+        self.session.run(dataset[0])
+
+
 
     def model(self, batch, lr, wd, ema, beta, w_match, warmup_kimg=1024, nu=2, mixmode='xxy.yxy', **kwargs):
 
@@ -57,6 +64,7 @@ class DeepLP(Mixup):
         x_in = tf.placeholder(tf.float32, [None] + hwc, 'x')
         y_in = tf.placeholder(tf.float32, [None, nu] + hwc, 'y')
         l_in = tf.placeholder(tf.int32, [None], 'labels')
+        plabel_in = tf.placeholder(tf.float32, [None, 4], 'pseudo_labels')
 
         wd *= lr
         w_match *= tf.clip_by_value(tf.cast(self.step, tf.float32) / (warmup_kimg << 10), 0, 1)
@@ -90,7 +98,6 @@ class DeepLP(Mixup):
         self.loss_xe = loss_xe
         self.loss_l2u = loss_l2u
 
-
         ema = tf.train.ExponentialMovingAverage(decay=ema)
         ema_op = ema.apply(utils.model_vars())
         ema_getter = functools.partial(utils.getter_ema, ema)
@@ -101,7 +108,6 @@ class DeepLP(Mixup):
         train_op = tf.train.AdamOptimizer(lr).minimize(loss_xe + w_match * loss_l2u, colocate_gradients_with_ops=True)
         with tf.control_dependencies([train_op]):
             train_op = tf.group(*post_ops)
-
 
         # Tuning op: only retrain batch norm.
         skip_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -114,15 +120,16 @@ class DeepLP(Mixup):
             tf.summary.scalar('losses/l2u', loss_l2u),
             ])
 
-
         return EasyDict(
             x=x_in,
             y=y_in,
             label=l_in,
+            plabel=plabel_in,
             train_op=train_op,
             tune_op=train_bn,
             classify_raw=tf.nn.softmax(classifier(x_in, training=False)),  # No EMA, for debugging.
-            classify_op=tf.nn.softmax(classifier(x_in, getter=ema_getter, training=False)))
+            classify_op=tf.nn.softmax(classifier(x_in, getter=ema_getter, training=False)),
+            )
 
 
 def main(argv):
@@ -130,7 +137,7 @@ def main(argv):
     assert FLAGS.nu == 2
     dataset = DATASETS[FLAGS.dataset]()
     log_width = utils.ilog2(dataset.width)
-    model = MixMatch(
+    model = DeepLP(
         os.path.join(FLAGS.train_dir, dataset.name),
         dataset,
         lr=FLAGS.lr,
@@ -163,4 +170,5 @@ if __name__ == '__main__':
     FLAGS.set_default('batch', 64)
     FLAGS.set_default('lr', 0.0002)
     FLAGS.set_default('train_kimg', 1 << 16)
+    FLAGS.set_default('num_pseudo_label_channels', 3)
     app.run(main)

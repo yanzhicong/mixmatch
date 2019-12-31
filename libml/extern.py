@@ -33,7 +33,7 @@ class ClassifySemiWithPLabel(MultiModel):
         raise NotImplementedError()
 
     def eval_pseudo_label(self, dataset):
-    raise NotImplementedError()
+        raise NotImplementedError()
 
     def add_summaries(self, feed_extra=None, **kwargs):
         super(ClassifySemiWithPLabel, self).add_summaries(feed_extra=feed_extra, **kwargs)
@@ -43,5 +43,11 @@ class ClassifySemiWithPLabel(MultiModel):
 
     def on_epoch_start(self, epoch_ind, epochs):
         super(ClassifySemiWithPLabel, self).on_epoch_start(epoch_ind, epochs)
+
+        update = False
+        if epoch_ind < 10:
+            update = True
+        if epoch_ind < 
+
         self.update_pseudo_label()
 

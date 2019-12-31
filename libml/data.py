@@ -49,6 +49,7 @@ def record_parse(dataset: tf.data.Dataset) -> tf.data.Dataset:
                     'label': tf.FixedLenFeature([], tf.int64)})
     return dataset.map(record_parse_internal)
 
+
 def default_parse(dataset: tf.data.Dataset) -> tf.data.Dataset:
     def record_parse(serialized_example):
         features = tf.parse_single_example(
@@ -147,7 +148,6 @@ def memoize(dataset: tf.data.Dataset) -> tf.data.Dataset:
     def tf_get(index):
         def get(index):
             return images[index], labels[index]
-
         image, label = tf.py_func(get, [index], [tf.float32, tf.int64])
         return dict(image=image, label=label)
 
@@ -199,6 +199,7 @@ class DataSource:
     def load_data(self, filename):
         self.filename = filename
         if filename is not None:
+            print(filename)
             assert self.filename.split('.')[-1] in ['tfrecord', 'txt']
             if self.filename.endswith('tfrecord'):
                 self.load_tf_record_data_source()
@@ -248,7 +249,7 @@ class DataSource:
             return cv_img
 
         def to_dataset(img_proc_func, num_parallel=1):
-            data_list = [self.datasource['images'], self.datasource['labels']]
+            data_list = [self.datasource['images'], np.array(self.datasource['labels']).astype(np.int64)]
             if 'pseudo_labels' in self.datasource:
                 data_list.append(self.datasource['pseudo_labels'])
             dataset = tf.data.Dataset.from_tensor_slices(tuple(data_list))
@@ -284,8 +285,8 @@ class DataSet(object):
             self.labeled_data_path = os.path.join(DATA_DIR, '%s-train.tfrecord' % name)
             self.unlabeled_data_path = os.path.join(DATA_DIR, '%s-train.tfrecord' % name)
         else:
-            self.labeled_data_path = self.root + '-labeled.tfrecord'
-            self.unlabeled_data_path = self.root + '-unlabeled.tfrecord'
+            self.labeled_data_path = self.root + '-label.tfrecord'
+            self.unlabeled_data_path = self.root + '-unlabel.tfrecord'
         self.test_data_path = os.path.join(DATA_DIR, '%s-test.tfrecord' % name)
 
 
@@ -323,7 +324,12 @@ class DataSet(object):
                             instance.test_data_path])
 
                 if split_indices is None:
-                    split_indices = random_split_ind(unlabeled_data.labels, num_valid_per_class=valid)
+                    
+                    if unlabeled_data.data_type == 'tfrecord':      # just patch
+                        split_indices = random_split_ind(unlabeled_data.labels, num_valid_per_class=valid//nclass)
+                    else:
+                        split_indices = random_split_ind(unlabeled_data.labels, num_valid_per_class=valid)
+
 
                 # 从unlabeled_data中分离出valid_data
                 valid_data, unlabeled_data = unlabeled_data.split_by_indices(split_indices)
@@ -333,7 +339,6 @@ class DataSet(object):
                     # 使用full_dataset时，labeled_data与unlabeled_data相同，将valid_data从labeled_data中分离出来
                     _, labeled_data = labeled_data.split_by_indices(split_indices)
 
-                
                 if use_pseudo_label:
                     unlabeled_data.create_pesudo_labels()
 
@@ -344,7 +349,6 @@ class DataSet(object):
                     test_data=test_data
                 ))
 
-
                 # build tf dataset pipeline
                 train_labeled, train_unlabeled, eval_labeled, eval_unlabeled, eval_valid, test = map(lambda x:x.create_tf_dataset(para2), [labeled_data, unlabeled_data] * 2 + [valid_data, test_data])
 
@@ -352,9 +356,12 @@ class DataSet(object):
                 train_unlabeled = fn(train_unlabeled).map(augment[1], para1)
 
                 if FLAGS.whiten:
-                    mean_var = json.loads(open(os.path.join(DATA_DIR, '%s-meanvar.json' % name), 'r').read())
-                    mean = np.array(mean_var['mean'])
-                    std = np.array(mean_var['var'])
+                    if unlabeled_data.data_type == 'tfrecord':      # just patch
+                        mean, std = compute_mean_std(eval_unlabeled)
+                    else:
+                        mean_var = json.loads(open(os.path.join(DATA_DIR, '%s-meanvar.json' % name), 'r').read())
+                        mean = np.array(mean_var['mean'])
+                        std = np.array(mean_var['var'])
                 else:
                     mean, std = 0, 1
 

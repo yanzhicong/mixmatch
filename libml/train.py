@@ -44,8 +44,6 @@ flags.DEFINE_string(
 
 
 class Model:
-
-
     def __init__(self, train_dir: str, dataset: data.DataSet, **kwargs):
         self.train_dir = os.path.join(
             train_dir, self.experiment_name(**kwargs))
@@ -187,7 +185,6 @@ class ClassifySemi(Model):
         pass
 
 
-
     def train(self, epochs, steps_per_epoch, summary_interval=100, ssl=True):
         if FLAGS.eval_ckpt:
             self.eval_checkpoint(FLAGS.eval_ckpt)
@@ -277,7 +274,6 @@ class ClassifySemi(Model):
         print('%16s %8s %8s %8s' % (('tuned_raw',) + tuple('%.2f' % x for x in tuned_raw)))
         print('%16s %8s %8s %8s' % (('tuned_ema',) + tuple('%.2f' % x for x in tuned_ema)))
 
-    
     def eval_stats(self, eval_dict=None, batch=None, feed_extra=None, classify_op=None):
         """Evaluate model on train, valid and test."""
         batch = batch or FLAGS.batch
