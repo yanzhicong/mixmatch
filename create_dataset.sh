@@ -30,4 +30,4 @@ for seed in 1 2 3 4 5; do
     for size in 40 100; do
         python ./scripts/create_txt_split.py --seed=$seed --size=$size $ML_DATA/SSL/miniimagenet $ML_DATA/miniimagenet-train.txt
     done
-done
+done    

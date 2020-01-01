@@ -238,8 +238,8 @@ class DataSource:
         a.datasource, b.datasource = split_data_by_ind(self.datasource, indices)
         return a, b
         
-    def create_pesudo_labels(self):
-        if 'pesudo_labels' not in self.datasource:
+    def create_pseudo_labels(self):
+        if 'pseudo_labels' not in self.datasource:
             self.datasource['pseudo_labels'] = tf.get_variable('pseudo_labels', shape=[self.size, FLAGS.num_pseudo_label_channels], dtype=tf.float32, initializer=tf.zeros_initializer())
 
     def create_tf_dataset(self, num_parallel=1):
@@ -340,7 +340,7 @@ class DataSet(object):
                     _, labeled_data = labeled_data.split_by_indices(split_indices)
 
                 if use_pseudo_label:
-                    unlabeled_data.create_pesudo_labels()
+                    unlabeled_data.create_pseudo_labels()
 
                 instance.__dict__.update(dict(
                     labeled_data=labeled_data,

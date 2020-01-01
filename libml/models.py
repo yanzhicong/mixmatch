@@ -157,23 +157,23 @@ class ResNet(ClassifySemi):
                 return x0 + x
 
 
-        layer_func_dict = OrderedDict(
+        layer_func_dict = OrderedDict([
             ('inp', lambda x:(x-self.dataset.mean)/self.dataset.std),
             ('conv1', partial(tf.layers.conv2d, filters=16, kernel_size=3, **conv_args(3,16))),
-        )
+        ])
 
         for scale in range(scales):
             layer_name = 'res%da'%(scale+1)
             layer_func_dict[layer_name] = partial(residual, name=layer_name, filters=filters<<scale, stride=(2 if scale else 1), activate_before_residual=(scale == 0))
             for i in range(repeat-1):
-                layer_name = 'res%d%s'%(scale+1, chr(ord('b')+repeat))
+                layer_name = 'res%d%s'%(scale+1, chr(ord('b')+i))
                 layer_func_dict[layer_name] = partial(residual, name=layer_name, filters=filters<<scale)
 
         layer_func_dict['bn'] = partial(tf.layers.batch_normalization, **bn_args)
         layer_func_dict['act'] = leaky_relu
         layer_func_dict['avgpool'] = partial(tf.reduce_mean, axis=[1, 2])
 
-        layer_func_dict['fc1'] = partial(tf.layers.dense, units=self.nclass, kernel_initializer=tf.glort_normal_initializer())
+        layer_func_dict['fc1'] = partial(tf.layers.dense, units=self.nclass, kernel_initializer=tf.glorot_normal_initializer())
         layer_func_dict['logits'] = tf.identity
 
         return layer_func_dict
@@ -209,12 +209,12 @@ class ResNet18(ClassifySemi):
 
         def residual(x0, name, filters, stride=1, activate_before_residual=False):
             with tf.variable_scope(name):
-                x = leaky_relu(tf.layers.batch_normalization(x0, **bn_args))
+                x = lrelu(tf.layers.batch_normalization(x0, **bn_args))
                 if activate_before_residual:
                     x0 = x
 
                 x = tf.layers.conv2d(x, filters, 3, strides=stride, **conv_args(3, filters))
-                x = leaky_relu(tf.layers.batch_normalization(x, **bn_args))
+                x = lrelu(tf.layers.batch_normalization(x, **bn_args))
                 x = tf.layers.conv2d(x, filters, 3, **conv_args(3, filters))
 
                 if x0.get_shape()[3] != filters:
@@ -222,25 +222,26 @@ class ResNet18(ClassifySemi):
 
                 return x0 + x
 
-
-        layer_func_dict = OrderedDict(
+        layer_func_dict = OrderedDict([
             ('inp', lambda x:(x-self.dataset.mean)/self.dataset.std),
             ('conv1', partial(tf.layers.conv2d, filters=64, kernel_size=7, strides=2, **conv_args(7,64))),
             ('maxpool1', partial(tf.layers.max_pooling2d, pool_size=2, strides=2)),
-        )
+        ])
 
         for scale in range(scales):
             layer_name = 'res%da'%(scale+1)
             layer_func_dict[layer_name] = partial(residual, name=layer_name, filters=filters<<scale, stride=(2 if scale else 1), activate_before_residual=(scale == 0))
             for i in range(repeat-1):
-                layer_name = 'res%d%s'%(scale+1, chr(ord('b')+repeat))
+                layer_name = 'res%d%s'%(scale+1, chr(ord('b')+i))
                 layer_func_dict[layer_name] = partial(residual, name=layer_name, filters=filters<<scale)
 
         layer_func_dict['bn'] = partial(tf.layers.batch_normalization, **bn_args)
         layer_func_dict['act'] = lrelu
         layer_func_dict['avgpool'] = partial(tf.reduce_mean, axis=[1, 2])
 
-        layer_func_dict['fc1'] = partial(tf.layers.dense, units=self.nclass, kernel_initializer=tf.glort_normal_initializer())
+        layer_func_dict['fc1'] = partial(tf.layers.dense, units=128, kernel_initializer=tf.glorot_normal_initializer())
+        layer_func_dict['act'] = lrelu
+        layer_func_dict['fc2'] = partial(tf.layers.dense, units=self.nclass, kernel_initializer=tf.glorot_normal_initializer())
         layer_func_dict['logits'] = tf.identity
 
         return layer_func_dict
@@ -316,10 +317,10 @@ class ShakeNet(ClassifySemi):
 
                 return x0 + x
 
-        layer_func_dict = OrderedDict(
+        layer_func_dict = OrderedDict([
             ('inp', lambda x:(x-self.dataset.mean)/self.dataset.std),
             ('conv1', partial(tf.layers.conv2d, filters=16, kernel_size=3, **conv_args(3, 16))),
-        )
+        ])
 
         for scale, i in itertools.product(range(scales), range(repeat)):
             layer_name = 'layer%d.%d' % (scale + 1, i)
@@ -346,7 +347,7 @@ class ShakeNet(ClassifySemi):
         # return logits
 
 
-class MultiModel(CNN13, ConvNet, ResNet, ShakeNet):
+class MultiModel(CNN13, ConvNet, ResNet, ShakeNet, ResNet18):
     MODEL_CNN13, MODEL_CONVNET, MODEL_RESNET, MODEL_RESNET18, MODEL_SHAKE = 'cnn13 convnet resnet resnet18 shake'.split()
     MODELS = MODEL_CNN13, MODEL_CONVNET, MODEL_RESNET, MODEL_RESNET18, MODEL_SHAKE
 
@@ -385,15 +386,22 @@ class MultiModel(CNN13, ConvNet, ResNet, ShakeNet):
     def feature_ext(self, x, arch, feat_endpoint=None, getter=None, **kwargs):
         layer_func_dict = self.get_model(x, arch, getter=getter, **kwargs)
 
+        default_feat_endpoint = 'fc1'
+        if arch == self.MODEL_RESNET18:
+            default_feat_endpoint = 'fc2'
+
         out = x
         with tf.name_scope(arch[0].upper()+arch[1:].lower()):
             with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
                 for layer_name, layer_func in layer_func_dict.items():
-                    if layer_name == 'fc1':
+                    if layer_name == default_feat_endpoint:
+                        # print('feature_ext : ', out.get_shape())
                         return out
+
                     out = layer_func(out)
                 
                     if layer_name == feat_endpoint:
+                        # print('feature_ext : ', out.get_shape())
                         return out
 
 

@@ -205,6 +205,7 @@ class ClassifySemi(Model):
             else:
                 self.train_unlabeled = None, None
             self.eval_labeled = get_dataset_reader(self.dataset.eval_labeled, batch)
+            self.eval_unlabeled = get_dataset_reader(self.dataset.eval_unlabeled, batch)
             self.valid = get_dataset_reader(self.dataset.valid, batch)
             self.test = get_dataset_reader(self.dataset.test, batch)
 

@@ -25,20 +25,37 @@ from absl import app
 from absl import flags
 from easydict import EasyDict
 from libml import layers, utils, models
-from libml.data_pair import DATASETS
+# from libml.data_pair import DATASETS
+from libml.data import DATASETS
 from libml.layers import MixMode
 from libml.extern import ClassifySemiWithPLabel
 import tensorflow as tf
+import numpy as np
 
 FLAGS = flags.FLAGS
 
 from mixup import Mixup
+from libml.lp_utils import graph_laplace, entropy_weight
 
 
 class DeepLP(ClassifySemiWithPLabel):
 
-    def augment(self, x, l, beta, **kwargs):
-        assert 0, 'Do not call.'
+    def augment(self, x, l, w=None, beta=1.0, **kwargs):
+        del kwargs
+
+        if beta < 1e-5:
+            return x, l
+        else:
+            mix = tf.distributions.Beta(beta, beta).sample([tf.shape(x)[0], 1, 1, 1])
+            mix = tf.maximum(mix, 1 - mix)
+            xmix = x * mix + x[::-1] * (1 - mix)
+            lmix = l * mix[:, :, 0, 0] + l[::-1] * (1 - mix[:, :, 0, 0])
+            if w is None:
+                return xmix, lmix
+            else:
+                wmix = w * mix + w[::-1] * (1-mix)
+                return xmix, lmix, wmix
+
 
     # def guess_label(self, y, classifier, T, **kwargs):
     #     del kwargs
@@ -53,50 +70,132 @@ class DeepLP(ClassifySemiWithPLabel):
     #     return EasyDict(p_target=p_target, p_model=p_model_y)
 
     def update_pseudo_label(self):
-        dataset = self.dataset.eval_unlabeled
-        self.session.run(dataset[0])
+
+        labeled_dataset = self.eval_labeled
+        unlabeled_dataset = self.eval_unlabeled
+
+        subset_list = ['labeled', 'unlabeled']
+        dataset_list = [self.eval_labeled, self.eval_unlabeled]
+
+        feats_dict = {}
+        ema_feats_dict = {}
+        labels_dict = {}
+        
+
+
+        for subset, dataset in zip(subset_list, dataset_list):
+            self.session.run(dataset[0])
+
+            feats = []
+            ema_feats = []
+            labels = []
+        
+            while True:
+                try:
+                    v = self.session.run(dataset[1])
+                    f1, f2 = self.session.run(
+                        [self.ops.feat_ext_raw, self.ops.feat_ext_op],
+                        feed_dict={
+                            self.ops.x: v['image'],
+                        })
+                    # print(f1.shape, f2.shape)
+                    feats.append(f1)
+                    ema_feats.append(f2)
+                    labels.append(v['label'])
+                    
+                except tf.errors.OutOfRangeError:
+                    break
+
+            # print(np.array(feats).shape)
+            # print(np.array(ema_feats).shape)
+
+            feats_dict[subset] = np.concatenate(feats, axis=0)
+            ema_feats_dict[subset] = np.concatenate(ema_feats, axis=0)
+            labels_dict[subset] = np.concatenate(labels, axis=0)
+
+        num_labeled = len(feats_dict['labeled'])
+        num_unlabeled = len(feats_dict['unlabeled'])
+
+        label = labels_dict['labeled']
+        label_indices = np.arange(len(label))
+
+        def _get(d, l):
+            return np.concatenate([d[i] for i in l], axis=0)
+
+        all_feats = _get(feats_dict, subset_list)
+        all_ema_feats = _get(ema_feats_dict, subset_list)
+
+
+        print(all_feats.shape)
+        Y0, W0 = graph_laplace(all_feats, label, label_indices, self.nclass)
+        Y1, W1 = graph_laplace(all_ema_feats, label, label_indices, self.nclass)
+
+        Y0, W0, Y1, W1 = map(lambda x:x[num_labeled:], [Y0, W0, Y1, W1])
 
 
 
-    def model(self, batch, lr, wd, ema, beta, w_match, warmup_kimg=1024, nu=2, mixmode='xxy.yxy', **kwargs):
+        self.session.run(self.dataset.pseudo_labels.assign(np.array([Y0, W0, Y1, W1, labels_dict['unlabeled']], dtype=np.float32).transpose()))
+
+
+    def add_summaries(self, feed_extra=None, **kwargs):
+        super(DeepLP, self).add_summaries(feed_extra=feed_extra, **kwargs)
+
+        def gen_stats():
+
+            plabel = self.session.run(self.dataset.pseudo_labels)
+            
+            acc1, wacc1 = self.eval_pesudo_label_acc(plabel[:, 0].astype(np.int32), plabel[:, 1], plabel[:, 4].astype(np.int32))
+            acc2, wacc2 = self.eval_pesudo_label_acc(plabel[:, 2].astype(np.int32), plabel[:, 3], plabel[:, 4].astype(np.int32))
+
+            return np.array([acc1, wacc1, acc2, wacc2], dtype=np.float32)
+
+
+        accuracies = tf.py_func(gen_stats, [], tf.float32)
+
+        self.summary = tf.summary.merge([
+            self.summary,
+            tf.summary.scalar('accuracy/plabel', accuracies[0]),
+            tf.summary.scalar('weighted_accuracy/plabel', accuracies[1]),
+            tf.summary.scalar('accuracy/ema_plabel', accuracies[2]),
+            tf.summary.scalar('weighted_accuracy/ema_plabel', accuracies[3]),
+        ])
+
+
+
+    def model(self, batch, lr, wd, ema, beta, w_match, warmup_kimg=1024, mixmode='xxy.yxy', **kwargs):
 
         hwc = [self.dataset.height, self.dataset.width, self.dataset.colors]
         x_in = tf.placeholder(tf.float32, [None] + hwc, 'x')
-        y_in = tf.placeholder(tf.float32, [None, nu] + hwc, 'y')
+        y_in = tf.placeholder(tf.float32, [None] + hwc, 'y')
         l_in = tf.placeholder(tf.int32, [None], 'labels')
-        plabel_in = tf.placeholder(tf.float32, [None, 4], 'pseudo_labels')
+        plabel_in = tf.placeholder(tf.float32, [None, 5], 'pseudo_labels')
 
         wd *= lr
         w_match *= tf.clip_by_value(tf.cast(self.step, tf.float32) / (warmup_kimg << 10), 0, 1)
-        augment = MixMode(mixmode)
+        # augment = MixMode(mixmode)
+
         classifier = functools.partial(self.classifier, **kwargs)
+        feat_ext = functools.partial(self.feature_ext, **kwargs)
 
-        y = tf.reshape(tf.transpose(y_in, [1, 0, 2, 3, 4]), [-1] + hwc)
-        guess = self.guess_label(tf.split(y, nu), classifier, T=0.5, **kwargs)
-        ly = tf.stop_gradient(guess.p_target)
         lx = tf.one_hot(l_in, self.nclass)
-        xy, labels_xy = augment([x_in] + tf.split(y, nu), [lx] + [ly] * nu, [beta, beta])
-        x, y = xy[0], xy[1:]
-        labels_x, labels_y = labels_xy[0], tf.concat(labels_xy[1:], 0)
-        del xy, labels_xy
+        ly_l = tf.one_hot(tf.cast(plabel_in[ :, 2], tf.int64), self.nclass)
+        ly_w = tf.cast(plabel_in[ :, 3], tf.float32)
 
-        batches = layers.interleave([x] + y, batch)
+
+        x, lx = self.augment(x_in, lx, beta=beta)
+        y, ly, wy = self.augment(y_in, ly_l, ly_w)
+
         skip_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-        logits = [classifier(batches[0], record_feature=True, training=True)]
+        xlogits = [classifier(x, training=True)]
+        ylogits = [classifier(y, training=True)]
+
         post_ops = [v for v in tf.get_collection(tf.GraphKeys.UPDATE_OPS) if v not in skip_ops]
-        for batchi in batches[1:]:
-            logits.append(classifier(batchi, training=True))
-        logits = layers.interleave(logits, batch)
-        logits_x = logits[0]
-        logits_y = tf.concat(logits[1:], 0)
 
-        loss_xe = tf.nn.softmax_cross_entropy_with_logits_v2(labels=labels_x, logits=logits_x)
+        loss_xe = tf.nn.softmax_cross_entropy_with_logits_v2(labels=lx, logits=xlogits)
         loss_xe = tf.reduce_mean(loss_xe)
-        loss_l2u = tf.square(labels_y - tf.nn.softmax(logits_y))
-        loss_l2u = tf.reduce_mean(loss_l2u)
 
-        self.loss_xe = loss_xe
-        self.loss_l2u = loss_l2u
+        loss_xeu = tf.nn.softmax_cross_entropy_with_logits_v2(labels=ly, logits=ylogits)
+        loss_xeu = tf.reduce_mean(loss_xeu * ly_w)
 
         ema = tf.train.ExponentialMovingAverage(decay=ema)
         ema_op = ema.apply(utils.model_vars())
@@ -105,37 +204,42 @@ class DeepLP(ClassifySemiWithPLabel):
         post_ops.extend([tf.assign(v, v * (1 - wd)) for v in utils.model_vars('classify') if 'kernel' in v.name])
 
 
-        train_op = tf.train.AdamOptimizer(lr).minimize(loss_xe + w_match * loss_l2u, colocate_gradients_with_ops=True)
+        train_op = tf.train.AdamOptimizer(lr).minimize(loss_xe + w_match * loss_xeu, colocate_gradients_with_ops=True)
         with tf.control_dependencies([train_op]):
             train_op = tf.group(*post_ops)
 
         # Tuning op: only retrain batch norm.
         skip_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-        classifier(batches[0], training=True)
+        classifier(x_in, training=True)
         train_bn = tf.group(*[v for v in tf.get_collection(tf.GraphKeys.UPDATE_OPS)
                               if v not in skip_ops])
 
+
         self.train_step_monitor_summary = tf.summary.merge([
             tf.summary.scalar('losses/xe', loss_xe),
-            tf.summary.scalar('losses/l2u', loss_l2u),
+            tf.summary.scalar('losses/xeu', loss_xeu),
+            tf.summary.scalar('vars/warm_up_weight', w_match),
+            tf.summary.scalar('vars/learning_rate', lr)
             ])
 
         return EasyDict(
             x=x_in,
             y=y_in,
             label=l_in,
-            plabel=plabel_in,
+            pseudo_label=plabel_in,
             train_op=train_op,
             tune_op=train_bn,
             classify_raw=tf.nn.softmax(classifier(x_in, training=False)),  # No EMA, for debugging.
             classify_op=tf.nn.softmax(classifier(x_in, getter=ema_getter, training=False)),
+            feat_ext_raw=feat_ext(x_in, training=False),
+            feat_ext_op=feat_ext(x_in, getter=ema_getter, training=False),
             )
 
 
 def main(argv):
     del argv  # Unused.
-    assert FLAGS.nu == 2
-    dataset = DATASETS[FLAGS.dataset]()
+    # assert FLAGS.nu == 2
+    dataset = DATASETS[FLAGS.dataset](use_pseudo_label=True)
     log_width = utils.ilog2(dataset.width)
     model = DeepLP(
         os.path.join(FLAGS.train_dir, dataset.name),
@@ -153,7 +257,7 @@ def main(argv):
         scales=FLAGS.scales or (log_width - 2),
         filters=FLAGS.filters,
         repeat=FLAGS.repeat)
-    model.train(FLAGS.train_kimg << 10, FLAGS.report_kimg << 10, summary_interval=100)
+    model.train(FLAGS.epochs, FLAGS.imgs_per_epoch // FLAGS.batch, summary_interval=100)
     # model.train(train_nimg=FLAGS.train_kimg << 10, report_nimg=FLAGS.report_kimg)
 
 
@@ -166,9 +270,14 @@ if __name__ == '__main__':
     flags.DEFINE_integer('scales', 0, 'Number of 2x2 downscalings in the classifier.')
     flags.DEFINE_integer('filters', 32, 'Filter size of convolutions.')
     flags.DEFINE_integer('repeat', 4, 'Number of residual layers per stage.')
-    FLAGS.set_default('dataset', 'cifar10.3@250-5000')
+
+    FLAGS.set_default('dataset', 'cifar10.3@4000-5000')
     FLAGS.set_default('batch', 64)
-    FLAGS.set_default('lr', 0.0002)
-    FLAGS.set_default('train_kimg', 1 << 16)
-    FLAGS.set_default('num_pseudo_label_channels', 3)
+    FLAGS.set_default('lr', 0.002)
+    FLAGS.set_default('lr_decay_rate', 0.001)
+    FLAGS.set_default('epochs', 100)
+    FLAGS.set_default('decay_start_epoch', 20)
+    FLAGS.set_default('imgs_per_epoch', 50000)
+
+    FLAGS.set_default('num_pseudo_label_channels', 5)
     app.run(main)
