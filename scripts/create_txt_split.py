@@ -76,7 +76,6 @@ def main(argv):
     # class_ind_map = {class_name:ind for ind, class_name in enumerate(class_list)}
     # ind_class_map = {ind:class_name for class_name, ind in class_ind_map.items()}
 
-
     labeled_image_list = []
     labeled_label_list = []
     unlabeled_image_list = []

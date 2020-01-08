@@ -100,7 +100,6 @@ class MixMatch(models.MultiModel):
         with tf.control_dependencies([train_op]):
             train_op = tf.group(*post_ops)
 
-
         # Tuning op: only retrain batch norm.
         skip_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         classifier(batches[0], training=True)
@@ -111,7 +110,6 @@ class MixMatch(models.MultiModel):
             tf.summary.scalar('losses/xe', loss_xe),
             tf.summary.scalar('losses/l2u', loss_l2u),
             ])
-
 
         return EasyDict(
             x=x_in,

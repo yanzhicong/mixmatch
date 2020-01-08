@@ -21,6 +21,7 @@ from absl import flags
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.client import device_lib
+import traceback
 
 _GPUS = None
 FLAGS = flags.FLAGS
@@ -225,3 +226,9 @@ def cal_entropy_weighed_acc(labels, predicted):
     weights = cal_entropy(predicted)
     return ((predicted.argmax(1) == labels).astype(np.float) * weights).sum() / weights.sum() * 100
 
+
+def eval_debug(s):
+    try:
+        print(s, eval(s))
+    except Exception:
+        traceback.print_exc()

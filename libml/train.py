@@ -26,6 +26,7 @@ import threading
 from collections import OrderedDict
 
 from libml import data, utils
+from libml import vis
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string('train_dir', './experiments',
@@ -55,13 +56,17 @@ class Model:
         self.step = tf.train.get_or_create_global_step()
         self.epoch = tf.get_variable('global_epoch', shape=[], dtype=tf.int32, initializer=tf.zeros_initializer(), trainable=False)
 
+        self.plotter = vis.Plotter()
+
         self.learning_rate = utils.get_exponential_learning_rate(lr=FLAGS.lr, global_epoch = self.epoch, start_epoch=FLAGS.decay_start_epoch, total_epochs=FLAGS.epochs, decay_rate=FLAGS.lr_decay_rate)
         kwargs['lr'] = self.learning_rate
 
         self.ops = self.model(**kwargs)
 
         self.ops.update_step = tf.assign_add(self.step, 1)
+        self.summary_list = []
         self.add_summaries(**kwargs)
+        self.summary = tf.summary.merge(self.summary_list)
 
         print(' Config '.center(80, '-'))
         print('train_dir', self.train_dir)
@@ -90,11 +95,15 @@ class Model:
     def checkpoint_dir(self):
         return os.path.join(self.train_dir, 'tf')
 
+    @property
+    def plotter_dir(self):
+        return os.path.join(self.train_dir, 'plt')
+
     def train_print(self, text):
         self.tmp.print_queue.append(text)
 
     def _create_initial_files(self):
-        for dir in (self.checkpoint_dir, self.arg_dir):
+        for dir in (self.checkpoint_dir, self.arg_dir, self.plotter_dir):
             if not os.path.exists(dir):
                 os.makedirs(dir)
         self.save_args()
@@ -139,6 +148,10 @@ class Model:
     def add_summaries(self, **kwargs):
         raise NotImplementedError()
 
+    def on_epoch_end(self, epoch_ind, epochs):
+        self.plotter.to_csv(self.plotter_dir)
+        self.plotter.to_html_report(os.path.join(self.plotter_dir, 'index.html'))
+
 
 class ClassifySemi(Model):
     """Semi-supervised classification."""
@@ -179,7 +192,7 @@ class ClassifySemi(Model):
         pass
 
     def on_epoch_end(self, epoch_ind, epochs):
-        pass
+        super(ClassifySemi, self).on_epoch_end(epoch_ind, epochs)
 
     def on_training_interrupted(self, epoch_ind, epochs):
         pass
@@ -221,7 +234,6 @@ class ClassifySemi(Model):
                 self.session.run([self.train_labeled[0], self.train_unlabeled[0]])
             else:
                 self.session.run([self.train_labeled[0],])
-
 
             for epoch_ind in range(epochs):
                 self.session.run(self.epoch.assign(epoch_ind))
@@ -315,6 +327,8 @@ class ClassifySemi(Model):
 
         self.train_print('kimg %-5d  accuracy train/valid/test  %.2f  %.2f  %.2f  weighted accuracy train/valid/test  %.2f  %.2f  %.2f' %
                         tuple([self.tmp.step >> 10] + accuracies + weighted_accuracies))
+
+
         return np.array(accuracies, 'f'), np.array(weighted_accuracies, 'f')
 
 
@@ -322,15 +336,29 @@ class ClassifySemi(Model):
         del kwargs
 
         def gen_stats():
-            return self.eval_stats(feed_extra=feed_extra)
+            epoch_ind = int(self.session.run(self.epoch))
+            accuracies = self.eval_stats(feed_extra=feed_extra)
+            self.plotter.scalar('train_labeled', epoch_ind, {
+                'acc': accuracies[0][0],
+                'wacc': accuracies[1][0]
+            })
+            self.plotter.scalar('valid', epoch_ind, {
+                'acc': accuracies[0][1],
+                'wacc': accuracies[1][1]
+            })
+            self.plotter.scalar('test', epoch_ind, {
+                'acc': accuracies[0][2],
+                'wacc': accuracies[1][2]
+            })
+            return accuracies
 
         accuracies = tf.py_func(gen_stats, [], [tf.float32, tf.float32])
-        self.summary = tf.summary.merge([    
+
+        self.summary_list += [    
                 tf.summary.scalar('accuracy/train_labeled', accuracies[0][0]),
                 tf.summary.scalar('accuracy/valid', accuracies[0][1]),
                 tf.summary.scalar('accuracy/test', accuracies[0][2]),
                 tf.summary.scalar('weighted_accuracy/train_labeled', accuracies[1][0]),
                 tf.summary.scalar('weighted_accuracy/valid', accuracies[1][1]),
                 tf.summary.scalar('weighted_accuracy/test', accuracies[1][2]),
-                ])
-
+        ]

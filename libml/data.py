@@ -49,21 +49,6 @@ def record_parse(dataset: tf.data.Dataset) -> tf.data.Dataset:
                     'label': tf.FixedLenFeature([], tf.int64)})
     return dataset.map(record_parse_internal)
 
-
-def default_parse(dataset: tf.data.Dataset) -> tf.data.Dataset:
-    def record_parse(serialized_example):
-        features = tf.parse_single_example(
-            serialized_example,
-            features={'image': tf.FixedLenFeature([], tf.string),
-                    'label': tf.FixedLenFeature([], tf.int64)})
-        image = tf.image.decode_image(features['image'])
-        image = tf.cast(image, tf.float32) * (2.0 / 255) - 1.0
-        label = features['label']
-        return dict(image=image, label=label)
-    para = 4 * max(1, len(utils.get_available_gpus())) * FLAGS.para_parse
-    return dataset.map(record_parse, num_parallel_calls=para)
-
-
 def random_split_ind(label_list, num_valid_per_class):
     label_set = np.unique(label_list)
     valid_ind_list = []
@@ -225,9 +210,9 @@ class DataSource:
                 raise ValueError('Empty dataset, did you mount gcsfuse bucket?')
             return tf.data.TFRecordDataset(filenames)
         self.datasource = extract_tf_dataset(record_parse(dataset([self.filename])))
-        # pass
 
-    def load_txt_data_source(self):
+
+    def load_txt_data_source(self): 
         self.datasource = extract_image_and_label_list([self.filename])
 
     def split_by_indices(self, indices):
@@ -237,7 +222,8 @@ class DataSource:
         b.filename = self.filename
         a.datasource, b.datasource = split_data_by_ind(self.datasource, indices)
         return a, b
-        
+    
+    # deprecated
     def create_pseudo_labels(self):
         if 'pseudo_labels' not in self.datasource:
             self.datasource['pseudo_labels'] = tf.get_variable('pseudo_labels', shape=[self.size, FLAGS.num_pseudo_label_channels], dtype=tf.float32, initializer=tf.zeros_initializer())
@@ -249,19 +235,21 @@ class DataSource:
             return cv_img
 
         def to_dataset(img_proc_func, num_parallel=1):
-            data_list = [self.datasource['images'], np.array(self.datasource['labels']).astype(np.int64)]
+            data_list = [np.arange(self.size, dtype=np.int64), self.datasource['images'], np.array(self.datasource['labels']).astype(np.int64)]
             if 'pseudo_labels' in self.datasource:
                 data_list.append(self.datasource['pseudo_labels'])
             dataset = tf.data.Dataset.from_tensor_slices(tuple(data_list))
 
             if 'pseudo_labels' in self.datasource:
-                dataset = dataset.map(map_func=lambda img, label, plabel: 
-                                            {'image' : img_proc_func(img), 
+                dataset = dataset.map(map_func=lambda ind, img, label, plabel: 
+                                            {'index' : ind,
+                                            'image' : img_proc_func(img), 
                                             'label' : label,
                                             'pseudo_label' : plabel}, num_parallel_calls=num_parallel)
             else:
-                dataset = dataset.map(map_func=lambda img, label: 
-                                            {'image' : img_proc_func(img), 
+                dataset = dataset.map(map_func=lambda ind, img, label: 
+                                            {'index' : ind,
+                                            'image' : img_proc_func(img), 
                                             'label' : label}, num_parallel_calls=num_parallel)
             return dataset
 
@@ -289,14 +277,13 @@ class DataSet(object):
             self.unlabeled_data_path = self.root + '-unlabel.tfrecord'
         self.test_data_path = os.path.join(DATA_DIR, '%s-test.tfrecord' % name)
 
-
     def assign_plabel(self, sess, plabel):
         if self.pseudo_labels is not None:
             sess.run(self.pseudo_labels.assign(plabel))
 
 
     @classmethod
-    def creator(cls, name, seed, label, valid, augment, parse_fn=default_parse, do_memoize=True, colors=3,
+    def creator(cls, name, seed, label, valid, augment, do_memoize=True, colors=3,
                 nclass=10, height=32, width=32, name_suffix='', full_dataset=False):
 
         if not isinstance(augment, list):
@@ -306,6 +293,7 @@ class DataSet(object):
         fullname = '.%d@%d' % (seed, label)
         dataset_name = name + name_suffix + fullname + '-' + str(valid) if not full_dataset else name + name_suffix + '-' + str(valid)
         
+        # use_pseudo_label : deprecated arg
         def create(split_indices=None, use_pseudo_label=False):
             p_labeled = p_unlabeled = None
             para1 = max(1, len(utils.get_available_gpus())) * FLAGS.para_augment
@@ -342,6 +330,7 @@ class DataSet(object):
                 if use_pseudo_label:
                     unlabeled_data.create_pseudo_labels()
 
+                # data source attributes
                 instance.__dict__.update(dict(
                     labeled_data=labeled_data,
                     unlabeled_data=unlabeled_data,
@@ -401,6 +390,7 @@ class TxtDataSet(DataSet):
             self.labeled_data_path = root + '-labeled.txt'
             self.unlabeled_data_path = root + '-unlabeled.txt'
         self.test_data_path = os.path.join(DATA_DIR, '%s-test.txt' % name)
+
 
 augment_stl10 = lambda x: {k:v if k != 'image' else augment_shift(augment_mirror(x['image']), 12) for k, v in x.items()}
 augment_cifar10 = lambda x: {k:v if k != 'image' else augment_shift(augment_mirror(x['image']), 4) for k, v in x.items()}

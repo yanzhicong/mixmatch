@@ -9,11 +9,14 @@ from libml.models import MultiModel
 FLAGS = flags.FLAGS
 
 import numpy as np
+import tensorflow as tf
+from tqdm import trange
 
 # flags.DEFINE_integer('steps_per_epoch', 60000//64, 'Steps per epoch.')
 
 
 class ClassifySemiWithPLabel(MultiModel):
+    
     
     def train_step(self, train_session, data_labeled, data_unlabeled, summary=None):
             x, y = self.session.run([data_labeled, data_unlabeled])
@@ -21,15 +24,15 @@ class ClassifySemiWithPLabel(MultiModel):
                 _, s, self.tmp.step = train_session.run([self.ops.train_op, summary, self.ops.update_step],
                                                 feed_dict={self.ops.x: x['image'],
                                                             self.ops.y: y['image'],
-                                                            self.ops.label: x['label'],
-                                                            self.ops.pseudo_label:y['pseudo_label']})
+                                                            self.ops.y_ind: y['index'],
+                                                            self.ops.label: x['label'],})
                 self.summary_writer.add_summary(s, global_step=self.tmp.step)
             else:
                 self.tmp.step = train_session.run([self.ops.train_op, self.ops.update_step],
                                                 feed_dict={self.ops.x: x['image'],
                                                             self.ops.y: y['image'],
-                                                            self.ops.label: x['label'],
-                                                            self.ops.pseudo_label:y['pseudo_label']})[1]
+                                                            self.ops.y_ind: y['index'],
+                                                            self.ops.label: x['label'],})[1]
 
     def update_pseudo_label(self):
         raise NotImplementedError()
@@ -56,14 +59,20 @@ class ClassifySemiWithPLabel(MultiModel):
         return acc, weighted_acc
 
 
-
     def on_epoch_start(self, epoch_ind, epochs):
         super(ClassifySemiWithPLabel, self).on_epoch_start(epoch_ind, epochs)
 
         update = False
-        # if epoch_ind < 10:
-        #     update = True
-        # if epoch_ind < 
+        if epoch_ind < 10:
+            update = True
+        elif epoch_ind < 20:
+            update = epoch_ind % 2 == 0
+        elif epoch_ind < 50:
+            update = epoch_ind % 5 == 0
+        else:
+            update = epoch_ind % 10 == 0
 
-        self.update_pseudo_label()
+
+        if update:
+            self.update_pseudo_label()
 
