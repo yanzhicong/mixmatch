@@ -25,9 +25,10 @@ from absl import app
 from absl import flags
 from easydict import EasyDict
 from libml import layers, utils, models
-from libml.data import DATASETS
+from libml.data import DATASETS, DataSource
 from libml.layers import MixMode
 from libml.extern import ClassifySemiWithPLabel
+from libml.vis import *
 import tensorflow as tf
 import numpy as np
 
@@ -48,14 +49,13 @@ class DeepLP(ClassifySemiWithPLabel):
             return x, l
         else:
             mix = tf.distributions.Beta(beta, beta).sample([tf.shape(x)[0], 1, 1, 1])
-            mix2 = tf.reshape(mix, shape=[tf.shape(x)[0],])
             mix = tf.maximum(mix, 1 - mix)
             xmix = x * mix + x[::-1] * (1 - mix)
             lmix = l * mix[:, :, 0, 0] + l[::-1] * (1 - mix[:, :, 0, 0])
             if w is None:
                 return xmix, lmix
             else:
-                wmix = w * mix2 + w[::-1] * (1-mix2)
+                wmix = w * mix[:, 0, 0, 0] + w[::-1] * (1-mix[:, 0, 0, 0])
                 return xmix, lmix, wmix
 
 
@@ -105,6 +105,10 @@ class DeepLP(ClassifySemiWithPLabel):
 
         all_feats = _get(feats_dict, subset_list)
         all_ema_feats = _get(ema_feats_dict, subset_list)
+    
+        data = FeatureSpaceRecordData2('network', all_feats, self.dataset.train_data, self.dataset.labeled_data.size)
+        data2 = FeatureSpaceRecordData2('ema network', all_ema_feats, self.dataset.train_data, self.dataset.labeled_data.size)
+        draw_data_list_to_html([data, data2], os.path.join(self.train_dir, 'feature_space'), int(self.session.run(self.epoch)))
 
         # label propagation on feature space from classifer
         Y0, W0 = graph_laplace(all_feats, label, label_indices, self.nclass)

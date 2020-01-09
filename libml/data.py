@@ -25,6 +25,7 @@ from tqdm import tqdm
 import numpy as np
 import json
 import cv2
+from easydict import EasyDict
 
 from libml import utils
 
@@ -72,10 +73,10 @@ def extract_image_and_label_list(filenames):
                 if len(splits) == 2:
                     image_list.append(splits[0].encode('utf-8'))
                     label_list.append(int(splits[1]))
-    return {
+    return EasyDict({
         'images':image_list, 
         'labels':label_list
-    }
+    })
 
 
 def extract_tf_dataset(dataset):
@@ -90,16 +91,16 @@ def extract_tf_dataset(dataset):
             pass
     images = [x['image'] for x in data]
     labels = [x['label'] for x in data]
-    return {
+    return EasyDict({
         'images': images,
         'labels': labels,
-    }
+    })
 
 
 def split_data_by_ind(data_dict, ind_list):
 
-    inc_data = {}
-    exc_data = {}
+    inc_data = EasyDict()
+    exc_data = EasyDict()
     
     def ind_include_filter(data_list, ind_list):
         ind_list.sort()
@@ -203,6 +204,17 @@ class DataSource:
     def data_type(self):
         return self.filename.split('.')[-1]
 
+    def get_img(self, ind):
+        if self.data_type == 'txt':
+            filein = np.fromfile(self.datasource['images'][ind].decode('utf-8'), dtype=np.uint8)
+            return cv2.imdecode(filein, cv2.IMREAD_COLOR)
+
+    def get_label(self, ind):
+        return self.datasource['labels'][ind]
+
+    def get_cls(self, ind):
+        return str(self.datasource['labels'][ind])
+
     def load_tf_record_data_source(self):
         def dataset(filenames: list) -> tf.data.Dataset:
             filenames = sorted(sum([glob.glob(x) for x in filenames], []))
@@ -222,6 +234,16 @@ class DataSource:
         b.filename = self.filename
         a.datasource, b.datasource = split_data_by_ind(self.datasource, indices)
         return a, b
+
+    @classmethod
+    def concatenate(cls, a, b):
+        ret = DataSource()
+        ret.filename = a.filename + '_' + b.filename
+        ret.datasource = dict(
+            images = a.datasource.images + b.datasource.images,
+            labels = a.datasource.labels + b.datasource.labels,
+        )
+        return ret
     
     # deprecated
     def create_pseudo_labels(self):
@@ -334,6 +356,7 @@ class DataSet(object):
                 instance.__dict__.update(dict(
                     labeled_data=labeled_data,
                     unlabeled_data=unlabeled_data,
+                    train_data=DataSource.concatenate(labeled_data, unlabeled_data),
                     valid_data=valid_data,
                     test_data=test_data
                 ))
@@ -425,3 +448,5 @@ DATASETS.update([TxtDataSet.creator('miniimagenet', seed, label, valid, argument
 
 DATASETS.update([TxtDataSet.creator('miniimagenet', 0, 0, valid, argument_miniimagenet, width=84, height=84, nclass=100, do_memoize=False, full_dataset=True)
                     for valid in [1, 50]])
+
+
