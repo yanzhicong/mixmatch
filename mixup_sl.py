@@ -24,12 +24,60 @@ from easydict import EasyDict
 from libml import data, utils, models
 import tensorflow as tf
 
+from libml.vis import *
+
 FLAGS = flags.FLAGS
 
+from collections import OrderedDict
 
 from mixup import Mixup
 
+
+
 class MixupSL(Mixup):
+
+    def on_epoch_start(self, epoch_ind, epochs):
+        super(MixupSL, self).on_epoch_start(epoch_ind, epochs)
+
+        if epoch_ind % 5 != 0:
+            return
+
+        eval_dict = OrderedDict(
+                train=self.dataset.labeled_data,
+                valid=self.dataset.valid_data,
+                test=self.dataset.test_data)
+
+        for subset, data_source in eval_dict.items():
+
+            nb_images = data_source.size
+            choose_indices = np.random.choice(np.arange(nb_images), size=10, replace=False)
+            labels = np.array([data_source.get_label(ind) for ind in choose_indices])
+            images = np.array([data_source.get_img(ind) for ind in choose_indices])
+
+            feats, cam = self.session.run(
+                self.ops.cam_op,
+                feed_dict={
+                    self.ops.x: images.astype(np.float32) / 255.0
+                })
+
+            data_list = [
+                ImageVSTensorData('class activation map', images, cam, point_out_ind={
+                    'l' : labels,
+                    'p' : np.argmax(feats.logits, axis=1),
+                }),
+            ]
+            watch_out_list = {
+                'cnn13' : ['conv2_3', 'conv_1_2'],
+                'resnet18' : ['res1b', 'res2b', 'res3b']
+            }[FLAGS.arch]
+            data_list += [ImageVSTensorData(l, images, feats[l]) for l in watch_out_list]
+
+            draw_data_list_to_html(data_list, os.path.join(self.train_dir, 'cam_view_'+subset), epoch_ind=int(self.session.run(self.epoch)))
+
+
+    def on_epoch_end(self, epoch_ind, epochs):
+        super(MixupSL, self).on_epoch_end(epoch_ind, epochs)
+
 
     def model(self, lr, wd, ema, **kwargs):
         hwc = [self.dataset.height, self.dataset.width, self.dataset.colors]
@@ -51,7 +99,6 @@ class MixupSL(Mixup):
         loss_xe = tf.nn.softmax_cross_entropy_with_logits_v2(labels=labels_x, logits=logits_x)
         loss_xe = tf.reduce_mean(loss_xe)
 
-
         train_op = tf.train.AdamOptimizer(lr).minimize(loss_xe, colocate_gradients_with_ops=True)
         with tf.control_dependencies([train_op]):
             train_op = tf.group(*post_ops)
@@ -69,8 +116,8 @@ class MixupSL(Mixup):
         return EasyDict(
             x=x_in, y=y_in, label=l_in, train_op=train_op, tune_op=train_bn,
             classify_raw=tf.nn.softmax(classifier(x_in, training=False)),  # No EMA, for debugging.
-            classify_op=tf.nn.softmax(classifier(x_in, training=False)))
-
+            classify_op=tf.nn.softmax(classifier(x_in, training=False)),
+            cam_op=self.cam_ext(x_in, training=False, **kwargs))
 
 
 def main(argv):
@@ -113,3 +160,6 @@ if __name__ == '__main__':
     FLAGS.set_default('decay_start_epoch', 20)
     FLAGS.set_default('imgs_per_epoch', 50000)
     app.run(main)
+
+
+

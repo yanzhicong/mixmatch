@@ -198,7 +198,7 @@ class ClassifySemi(Model):
         pass
 
 
-    def train(self, epochs, steps_per_epoch, summary_interval=100, ssl=True):
+    def train(self, epochs, steps_per_epoch, step_summary_interval=100, epoch_summary_interval=1, ssl=True):
         if FLAGS.eval_ckpt:
             self.eval_checkpoint(FLAGS.eval_ckpt)
             return
@@ -210,6 +210,8 @@ class ClassifySemi(Model):
             d = dataset.batch(batch).prefetch(
                 prefetch).make_initializable_iterator()
             return d.initializer, d.get_next()
+
+        
 
         with tf.name_scope('dataset_reader'):
             self.train_labeled = get_dataset_reader(self.dataset.train_labeled, batch)
@@ -238,26 +240,28 @@ class ClassifySemi(Model):
             for epoch_ind in range(epochs):
                 self.session.run(self.epoch.assign(epoch_ind))
 
-                self.on_epoch_start(epoch_ind, epochs)
+                with utils.time_warning('call on_epoch_start', 10):
+                    self.on_epoch_start(epoch_ind, epochs)
 
                 loop = trange(0, steps_per_epoch*batch, batch,
                               leave=False, unit='img', unit_scale=batch,
                               desc='Epoch %d/%d' % (1 + epoch_ind, epochs))
 
                 for step_ind in loop:
-                    if step_ind % summary_interval == 0:
+                    if step_summary_interval != 0 and step_ind % step_summary_interval == 0:
                         self.train_step(train_session, self.train_labeled[1], self.train_unlabeled[1], self.train_step_monitor_summary)
                     else:
                         self.train_step(train_session, self.train_labeled[1], self.train_unlabeled[1])
 
-
                     while self.tmp.print_queue:
                         loop.write(self.tmp.print_queue.pop(0))
 
-                s, st = self.session.run([self.summary, self.step])
-                self.summary_writer.add_summary(s, global_step=st)
+                if epoch_summary_interval != 0 and epoch_ind % epoch_summary_interval == 0:
+                    s, st = self.session.run([self.summary, self.step])
+                    self.summary_writer.add_summary(s, global_step=st)
 
-                self.on_epoch_end(epoch_ind, epochs)
+                with utils.time_warning('call on_epoch_end', 10):
+                    self.on_epoch_end(epoch_ind, epochs)
 
             while self.tmp.print_queue:
                 print(self.tmp.print_queue.pop(0))
@@ -294,6 +298,8 @@ class ClassifySemi(Model):
         accuracies = []
         weighted_accuracies = []
 
+        epoch_ind = int(self.session.run(self.epoch))
+
         if eval_dict is None:
             eval_dict = OrderedDict(
                 train_labeled=self.eval_labeled,
@@ -325,9 +331,8 @@ class ClassifySemi(Model):
             accuracies.append((predicted.argmax(1) == labels).mean() * 100)
             weighted_accuracies.append(utils.cal_entropy_weighed_acc(labels, predicted))
 
-        self.train_print('kimg %-5d  accuracy train/valid/test  %.2f  %.2f  %.2f  weighted accuracy train/valid/test  %.2f  %.2f  %.2f' %
-                        tuple([self.tmp.step >> 10] + accuracies + weighted_accuracies))
-
+        self.train_print('epoch %d  accuracy train/valid/test  %.2f  %.2f  %.2f entropy weighted accuracy train/valid/test  %.2f  %.2f  %.2f' %
+                        tuple([epoch_ind,] + accuracies + weighted_accuracies))
 
         return np.array(accuracies, 'f'), np.array(weighted_accuracies, 'f')
 
@@ -338,15 +343,15 @@ class ClassifySemi(Model):
         def gen_stats():
             epoch_ind = int(self.session.run(self.epoch))
             accuracies = self.eval_stats(feed_extra=feed_extra)
-            self.plotter.scalar('train_labeled', epoch_ind, {
+            self.plotter.scalar('train_labeled_acc', epoch_ind, {
                 'acc': accuracies[0][0],
                 'wacc': accuracies[1][0]
             })
-            self.plotter.scalar('valid', epoch_ind, {
+            self.plotter.scalar('valid_data_acc', epoch_ind, {
                 'acc': accuracies[0][1],
                 'wacc': accuracies[1][1]
             })
-            self.plotter.scalar('test', epoch_ind, {
+            self.plotter.scalar('test_data_acc', epoch_ind, {
                 'acc': accuracies[0][2],
                 'wacc': accuracies[1][2]
             })

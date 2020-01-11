@@ -142,7 +142,7 @@ def main(argv):
         scales=FLAGS.scales or (log_width - 2),
         filters=FLAGS.filters,
         repeat=FLAGS.repeat)
-    # model.train(FLAGS.train_kimg << 10, FLAGS.report_kimg << 10, summary_interval=100)
+    # model.train(FLAGS.train_kimg << 10, FLAGS.report_kimg << 10, step_summary_interval=100)
 
     model.train(FLAGS.epochs, FLAGS.imgs_per_epoch // FLAGS.batch)
     # model.train(train_nimg=FLAGS.train_kimg << 10, report_nimg=FLAGS.report_kimg)

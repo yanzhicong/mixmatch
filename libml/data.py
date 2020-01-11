@@ -30,7 +30,11 @@ from easydict import EasyDict
 from libml import utils
 
 _DATA_CACHE = None
-DATA_DIR = os.environ['ML_DATA']
+
+if 'ML_DATA' not in os.environ:
+    DATA_DIR = './data_ssl'
+else:
+    DATA_DIR = os.environ['ML_DATA']
 flags.DEFINE_string('dataset', 'cifar10.1@4000-5000', 'Data to train on.')
 flags.DEFINE_integer('para_parse', 4, 'Parallel parsing.')
 flags.DEFINE_integer('para_augment', 4, 'Parallel augmentation.')
@@ -95,6 +99,8 @@ def extract_tf_dataset(dataset):
         'images': images,
         'labels': labels,
     })
+
+
 
 
 def split_data_by_ind(data_dict, ind_list):
@@ -177,7 +183,7 @@ def compute_mean_std(data: tf.data.Dataset):
     return mean, std
 
 
-class DataSource:
+class DataSource(object):
     def __init__(self, filename=None):
         self.datasource=None
         self.load_data(filename)
@@ -191,6 +197,8 @@ class DataSource:
                 self.load_tf_record_data_source()
             elif self.filename.endswith('txt'):
                 self.load_txt_data_source()
+            else:
+                raise NotImplementedError()
 
     @property
     def size(self):
@@ -208,6 +216,11 @@ class DataSource:
         if self.data_type == 'txt':
             filein = np.fromfile(self.datasource['images'][ind].decode('utf-8'), dtype=np.uint8)
             return cv2.imdecode(filein, cv2.IMREAD_COLOR)
+        elif self.data_type == 'tfrecord':
+            return cv2.imdecode(np.frombuffer(self.datasource['images'][ind], dtype=np.uint8), cv2.IMREAD_COLOR)
+        else:
+            raise NotImplementedError()
+
 
     def get_label(self, ind):
         return self.datasource['labels'][ind]
@@ -334,16 +347,13 @@ class DataSet(object):
                             instance.test_data_path])
 
                 if split_indices is None:
-                    
                     if unlabeled_data.data_type == 'tfrecord':      # just patch
                         split_indices = random_split_ind(unlabeled_data.labels, num_valid_per_class=valid//nclass)
                     else:
                         split_indices = random_split_ind(unlabeled_data.labels, num_valid_per_class=valid)
 
-
                 # 从unlabeled_data中分离出valid_data
                 valid_data, unlabeled_data = unlabeled_data.split_by_indices(split_indices)
-
 
                 if full_dataset:
                     # 使用full_dataset时，labeled_data与unlabeled_data相同，将valid_data从labeled_data中分离出来

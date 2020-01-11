@@ -244,7 +244,7 @@ def main(argv):
         scales=FLAGS.scales or (log_width - 2),
         filters=FLAGS.filters,
         repeat=FLAGS.repeat)
-    model.train(FLAGS.epochs, FLAGS.imgs_per_epoch // FLAGS.batch, summary_interval=100)
+    model.train(FLAGS.epochs, FLAGS.imgs_per_epoch // FLAGS.batch, step_summary_interval=100, epoch_summary_interval=5)
 
 
 if __name__ == '__main__':

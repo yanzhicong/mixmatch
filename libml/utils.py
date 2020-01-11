@@ -16,12 +16,16 @@
 import glob
 import os
 import re
+import time
 
 from absl import flags
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.client import device_lib
 import traceback
+
+
+import contextlib
 
 _GPUS = None
 FLAGS = flags.FLAGS
@@ -37,17 +41,14 @@ def get_config():
     config.gpu_options.allow_growth = True
     return config
 
-
 def setup_tf():
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
     tf.logging.set_verbosity(tf.logging.ERROR)
-
 
 def smart_shape(x):
     s = x.shape
     st = tf.shape(x)
     return [s[i] if s[i].value is not None else st[i] for i in range(4)]
-
 
 def ilog2(x):
     """Integer log2."""
@@ -232,3 +233,12 @@ def eval_debug(s):
         print(s, eval(s))
     except Exception:
         traceback.print_exc()
+
+
+@contextlib.contextmanager
+def time_warning(name, thres):
+    start = time.time()
+    yield
+    end = time.time()
+    if end - start > thres:
+        print("Warning : %s costs %0.3fs"%(name, end - start))

@@ -26,15 +26,63 @@ from easydict import EasyDict
 from collections import OrderedDict
 from functools import partial
 
+import contextlib
+# from contextlib import ContextManager
 
 
-class CNN13(ClassifySemi):
+
+
+class BaseMultiModel(ClassifySemi):
+
+    def __init__(self, *wargs, **kwargs):
+        self.weights_dict = {}
+        super(BaseMultiModel, self).__init__(*wargs, **kwargs)
+        
+
+
+    @contextlib.contextmanager
+    def collect_weights(self, layer_name):
+        def get_current_variables():
+            return tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
+
+        if layer_name not in self.weights_dict:
+            self.weights_dict[layer_name] = []
+
+        variable_list = get_current_variables()
+        yield
+        new_variable_list = get_current_variables()
+        for var in new_variable_list:
+            if var not in variable_list:
+                self.weights_dict[layer_name].append(var)
+
+    def get_kernel_by_layer(self, layer_name):
+        assert layer_name in self.weights_dict
+        v_list = [v for v in self.weights_dict[layer_name] if 'kernel' in v.name]
+        assert len(v_list) == 1
+        return v_list[0]
+
+
+    def get_bias_by_layer(self, layer_name):
+        assert layer_name in self.weights_dict
+        v_list = [v for v in self.weights_dict[layer_name] if 'bias' in v.name]
+        assert len(v_list) == 1
+        return v_list[0]
+
+
+    def print_weight_dict(self):
+        for key, var_list in self.weights_dict.items():
+            print(key)
+            for var in var_list:
+                print('\t', var.name, var.get_shape())
+
+
+
+class CNN13(BaseMultiModel):
     """Simplified reproduction of the Mean Teacher paper network. filters=128 in original implementation.
     Removed dropout, Gaussians, forked dense layers, basically all non-standard things."""
 
-    # def __init__(*wargs, **kwargs):
-    #     super(CNN13, self).__init__(*wargs, **kwargs)
-
+    def conv_out_layer(self, scales, filters, repeat, **kwargs):
+        return 'bn3_3'
 
     def classifier(self, x, scales, filters, training, getter=None, **kwargs):
         del kwargs
@@ -74,20 +122,11 @@ class CNN13(ClassifySemi):
 
 
 
-        # out = x
+class ConvNet(BaseMultiModel):
 
-        # with tf.name_scope('CNN13'):
-        #     with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
+    def conv_out_layer(self, scales, filters, repeat, **kwargs):
+        return 'avgpool%d'%(scales+2)
 
-        #         for layer_name, layer_func in layer_func_dict.items():
-        #             out = layer_func(out)
-        #             print('\t%s : '%layer_name, out.get_shape())
-        #             endpoints[layer_name] = out
-
-        #     return endpoints
-
-
-class ConvNet(ClassifySemi):
     def classifier(self, x, scales, filters, getter=None, **kwargs):
         del kwargs
         conv_args = dict(kernel_size=3, activation=tf.nn.leaky_relu, padding='same')
@@ -103,33 +142,19 @@ class ConvNet(ClassifySemi):
             layer_func_dict['avgpool%d'%(scale+2)] = partial(tf.layers.average_pooling2d, pool_size=2, strides=2)
 
         layer_func_dict['conv%d'%(scales+2)] = partial(tf.layers.conv2d, filters=self.nclass, kernel_size=3, padding='same')
+
         layer_func_dict['avgpool%d'%(scales+2)] = partial(tf.reduce_mean, axis=[1,2])
         layer_func_dict['logits'] = tf.identity
 
         return layer_func_dict
 
-        
-        # with tf.name_scope('ConvNet'):
-        #     with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
-        #         for layer_name, layer_func in layer_func_dict.items():
-        #             out = layer_func(out)
-        #             print('\t%s : '%layer_name, out.get_shape())
-        #             endpoints[layer_name] = out
-        #     return endpoints
-
-        # with tf.name_scope('ConvNet'):
-        #     with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
-        #         y = tf.layers.conv2d(x, filters, **conv_args)
-        #         for scale in range(scales):
-        #             y = tf.layers.conv2d(y, filters << scale, **conv_args)
-        #             y = tf.layers.conv2d(y, filters << (scale + 1), **conv_args)
-        #             y = tf.layers.average_pooling2d(y, 2, 2)
-        #         y = tf.layers.conv2d(y, self.nclass, 3, padding='same')
-        #         logits = tf.reduce_mean(y, [1, 2])
-        #     return logits
 
 
-class ResNet(ClassifySemi):
+class ResNet(BaseMultiModel):
+
+
+    def conv_out_layer(self, scales, filters, repeat, **kwargs):
+        return 'act'
 
     def classifier(self, x, scales, filters, repeat, training, getter=None, **kwargs):
         
@@ -156,7 +181,6 @@ class ResNet(ClassifySemi):
 
                 return x0 + x
 
-
         layer_func_dict = OrderedDict([
             ('inp', lambda x:(x-self.dataset.mean)/self.dataset.std),
             ('conv1', partial(tf.layers.conv2d, filters=16, kernel_size=3, **conv_args(3,16))),
@@ -179,24 +203,12 @@ class ResNet(ClassifySemi):
         return layer_func_dict
 
 
-        # with tf.name_scope('ResNetSmall'):
-        #     with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
-        #         y = tf.layers.conv2d((x - self.dataset.mean) / self.dataset.std, 16, 3, **conv_args(3, 16))
-                
-        #         for scale in range(scales):
-        #             y = residual(y, filters << scale, stride=2 if scale else 1, activate_before_residual=scale == 0)
-        #             for i in range(repeat - 1):
-        #                 y = residual(y, filters << scale)
-
-        #         y = leaky_relu(tf.layers.batch_normalization(y, **bn_args))
-        #         y = tf.reduce_mean(y, [1, 2])
-        #         logits = tf.layers.dense(y, self.nclass, kernel_initializer=tf.glorot_normal_initializer())
-
-        #     print('ResNet classifier, output : ', logits.get_shape())
-        #     return logits
 
 
-class ResNet18(ClassifySemi):
+class ResNet18(BaseMultiModel):
+
+    def conv_out_layer(self, scales, filters, repeat, **kwargs):
+        return 'act'
 
     def classifier(self, x, scales, filters, repeat, training, getter=None, **kwargs):
         lrelu = functools.partial(tf.nn.leaky_relu, alpha=0.1)
@@ -225,7 +237,7 @@ class ResNet18(ClassifySemi):
         layer_func_dict = OrderedDict([
             ('inp', lambda x:(x-self.dataset.mean)/self.dataset.std),
             ('conv1', partial(tf.layers.conv2d, filters=64, kernel_size=7, strides=2, **conv_args(7,64))),
-            ('maxpool1', partial(tf.layers.max_pooling2d, pool_size=2, strides=2)),
+            ('maxpool1', partial(tf.layers.max_pooling2d, pool_size=3, strides=2)),
         ])
 
         for scale in range(scales):
@@ -239,53 +251,17 @@ class ResNet18(ClassifySemi):
         layer_func_dict['act'] = lrelu
         layer_func_dict['avgpool'] = partial(tf.reduce_mean, axis=[1, 2])
 
-        layer_func_dict['fc1'] = partial(tf.layers.dense, units=128, kernel_initializer=tf.glorot_normal_initializer())
-        layer_func_dict['act'] = lrelu
-        layer_func_dict['fc2'] = partial(tf.layers.dense, units=self.nclass, kernel_initializer=tf.glorot_normal_initializer())
+        layer_func_dict['fc1'] = partial(tf.layers.dense, units=self.nclass, kernel_initializer=tf.glorot_normal_initializer())
         layer_func_dict['logits'] = tf.identity
 
         return layer_func_dict
-    
-
-        # with tf.name_scope('ResNet'):
-        #     with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
-        #         for layer_name, layer_func in layer_func_dict.items():
-        #             out = layer_func(out)
-        #             print('\t%s : '%layer_name, out.get_shape())
-        #             endpoints[layer_name] = out
-        #     return endpoints
-
-        # with tf.name_scope('ResNet'):
-        #     with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
-
-        #         y = tf.layers.conv2d((x - self.dataset.mean) / self.dataset.std, 64, 7, strides=2, **conv_args(7, 64))
-        #         y = tf.layers.max_pooling2d(y, 2, 2)
-        #         print('\tmax_pooling2d, output : ', y.get_shape())
-
-        #         for scale in range(scales):
-        #             y = residual(y, filters << scale, stride=(2 if scale else 1), activate_before_residual=(scale == 0))
-        #             for i in range(repeat - 1):
-        #                 y = residual(y, filters << scale)
-                        
-        #             # if 'record_feature' in kwargs and kwargs['record_feature']:
-        #             #     self.features.append(y)
-        #         y = lrelu(tf.layers.batch_normalization(y, **bn_args))
-        #         print('\treduce_mean, input : ', y.get_shape())
-        #         y = tf.reduce_mean(y, [1, 2])
-                
-        #         # if 'record_feature' in kwargs and kwargs['record_feature']:
-        #         #     self.features.append(y)
-        #         logits = tf.layers.dense(y, self.nclass, kernel_initializer=tf.glorot_normal_initializer())
-        #     print('ResNet classifier, output : ', logits.get_shape())
-        #     # if 'record_feature' in kwargs and kgwars['record_feature']:
-        #     #     self.logits = logits
-        #     del kwargs
-        #     return logits
+ 
 
 
+class ShakeNet(BaseMultiModel):
+    def conv_out_layer(self, scales, filters, repeat, **kwargs):
+        return 'layer%d.%d'%(scales, repeat)
 
-
-class ShakeNet(ClassifySemi):
     def classifier(self, x, scales, filters, repeat, training, getter=None, **kwargs):
         del kwargs
         bn_args = dict(training=training, momentum=0.999)
@@ -314,7 +290,6 @@ class ShakeNet(ClassifySemi):
                 elif x0.get_shape()[3] != filters:
                     x0 = tf.layers.conv2d(x0, filters, 1, **conv_args(1, filters))
                     x0 = tf.layers.batch_normalization(x0, **bn_args)
-
                 return x0 + x
 
         layer_func_dict = OrderedDict([
@@ -323,8 +298,8 @@ class ShakeNet(ClassifySemi):
         ])
 
         for scale, i in itertools.product(range(scales), range(repeat)):
-            layer_name = 'layer%d.%d' % (scale + 1, i)
-            if i == 0:
+            layer_name = 'layer%d.%d' % (scale + 1, i + 1)
+            if i == 1:
                 layer_func_dict[layer_name] = partial(residual, name=layer_name, filters=filters<<scale, stride=2 if scale else 1)
             else:
                 layer_func_dict[layer_name] = partial(residual, name=layer_name, filters=filters<<scale)
@@ -334,17 +309,6 @@ class ShakeNet(ClassifySemi):
 
         return layer_func_dict
 
-        # with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
-        #     y = tf.layers.conv2d((x - self.dataset.mean) / self.dataset.std, 16, 3, **conv_args(3, 16))
-        #     for scale, i in itertools.product(range(scales), range(repeat)):
-        #         with tf.variable_scope('layer%d.%d' % (scale + 1, i)):
-        #             if i == 0:
-        #                 y = residual(y, filters << scale, stride=2 if scale else 1)
-        #             else:
-        #                 y = residual(y, filters << scale)
-        #     y = tf.reduce_mean(y, [1, 2])
-        #     logits = tf.layers.dense(y, self.nclass, kernel_initializer=tf.glorot_normal_initializer())
-        # return logits
 
 
 class MultiModel(CNN13, ConvNet, ResNet, ShakeNet, ResNet18):
@@ -370,20 +334,24 @@ class MultiModel(CNN13, ConvNet, ResNet, ShakeNet, ResNet18):
             raise ValueError('Model %s does not exists, available ones are %s' % (arch, self.MODELS))
 
 
-    def classifier(self, x, arch, getter=None, **kwargs):
-
+    def classifier(self, x, arch, getter=None, verbose=False, **kwargs):
+        ''' 对x进行卷积，并返回最后一层的输出结果 '''
         layer_func_dict = self.get_model(x, arch, getter=getter, **kwargs)
         out = x
 
-        with tf.name_scope(arch[0].upper()+arch[1:].lower()):
-            with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
-                for layer_name, layer_func in layer_func_dict.items():
+        with tf.variable_scope(arch[0].upper()+arch[1:].lower(), reuse=tf.AUTO_REUSE, custom_getter=getter):
+            for layer_name, layer_func in layer_func_dict.items():
+                with self.collect_weights(layer_name):
                     out = layer_func(out)
+
+                if verbose:
                     print('\t%s : '%layer_name, out.get_shape())
             return out
 
 
     def feature_ext(self, x, arch, feat_endpoint=None, getter=None, **kwargs):
+        ''' 对x进行卷积，并返回指定层的输出结果 '''
+
         layer_func_dict = self.get_model(x, arch, getter=getter, **kwargs)
 
         default_feat_endpoint = 'fc1'
@@ -391,36 +359,66 @@ class MultiModel(CNN13, ConvNet, ResNet, ShakeNet, ResNet18):
             default_feat_endpoint = 'fc2'
 
         out = x
-        with tf.name_scope(arch[0].upper()+arch[1:].lower()):
-            with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
-                for layer_name, layer_func in layer_func_dict.items():
-                    if layer_name == default_feat_endpoint:
-                        # print('feature_ext : ', out.get_shape())
-                        return out
-
-                    out = layer_func(out)
+        with tf.variable_scope(arch[0].upper()+arch[1:].lower(), reuse=tf.AUTO_REUSE, custom_getter=getter):
+            for layer_name, layer_func in layer_func_dict.items():
+                if layer_name == default_feat_endpoint:
+                    return out  
                 
-                    if layer_name == feat_endpoint:
-                        # print('feature_ext : ', out.get_shape())
-                        return out
+                with self.collect_weights(layer_name):
+                    out = layer_func(out)
+            
+                if layer_name == feat_endpoint:
+                    return out
 
 
-    def features_ext(self, x, arch, feat_endpoints, getter=None, **kwargs):
+    def features_ext(self, x, arch, getter=None, **kwargs):
+        ''' 对x进行卷积，并返回每一层的输出结果 '''
         layer_func_dict = self.get_model(x, arch, getter=getter, **kwargs)
 
         out = x
         endpoint_dict = EasyDict()
 
-        with tf.name_scope(arch[0].upper()+arch[1:].lower()):
-            with tf.variable_scope('classify', reuse=tf.AUTO_REUSE, custom_getter=getter):
-                for layer_name, layer_func in layer_func_dict.items():
-
+        with tf.variable_scope(arch[0].upper()+arch[1:].lower(), reuse=tf.AUTO_REUSE, custom_getter=getter):
+            for layer_name, layer_func in layer_func_dict.items():
+                with self.collect_weights(layer_name):
                     out = layer_func(out)
-                
-                    if layer_name in feat_endpoints:
-                        endpoint_dict[layer_name] = out
+                endpoint_dict[layer_name] = out
         return endpoint_dict
 
 
+    def cam_ext(self, x, arch, getter=None, **kwargs):
+        '''
+            获取x的class activation map
+        '''
+        input_h = int(x.get_shape()[1])
+        input_w = int(x.get_shape()[2])
+
+        cnn_out_layer = {
+            self.MODEL_CNN13 : CNN13.conv_out_layer,
+            self.MODEL_CONVNET : ConvNet.conv_out_layer,
+            self.MODEL_RESNET : ResNet.conv_out_layer,
+            self.MODEL_RESNET18 : ResNet18.conv_out_layer,
+            self.MODEL_SHAKE : ShakeNet.conv_out_layer,
+        }[arch](self, **kwargs)
+
+        endpoints = self.features_ext(x, arch, getter=getter, **kwargs)
+        cnn_output = endpoints[cnn_out_layer]
+
+        fc_weight = self.get_kernel_by_layer('fc1')
+        cam_map = tf.einsum('bijf,fc->bijc', cnn_output, fc_weight)
+        cam_map = tf.image.resize_images(cam_map, (input_w, input_h))
+
+        return endpoints, cam_map
+
+
+class BilinearModel(MultiModel):
+    def get_model(self, x, arch, getter=None, **kwargs):
+        if arch.startswith('bcnn'):
+            splits = arch.split('_')[1:]
+            if len(splits) == 1:
+                splits *= 2
+        else:
+            return super(BilinearModel, self).get_model(x, arch, getter=getter, **kwargs)
 flags.DEFINE_enum('arch', MultiModel.MODEL_RESNET, MultiModel.MODELS, 'Architecture.')
+
 

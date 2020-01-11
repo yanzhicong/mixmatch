@@ -203,8 +203,6 @@ class RecordData(object):
 
 
 
-
-
 class HtmlRecorder(RecordInterface):
 	# def __init__(self, ):
 	# 	self.output_path = output_path
@@ -235,10 +233,6 @@ class HtmlRecorder(RecordInterface):
 
 
 
-
-
-
-
 class RecordDataHelper(RecordData):
 
 	def cv2_imread(self, filepath):
@@ -256,10 +250,13 @@ class RecordDataHelper(RecordData):
 					for i in images]
 		else:
 			assert np.all(np.equal(w_list, w_list[0]))
+
 		if pad != 0:
-			images = [np.concatenate(i, np.ones([pad,]+list(i.shape[1:]) , dtype=i.dtype)*pad_value, axis=0) for i in images]
+			images = [np.vstack([i, np.ones([pad,]+list(i.shape[1:]), dtype=i.dtype)*pad_value]) for i in images[:-1]] + [images[-1],]
+
+		if not isinstance(images, list):
+			images = [i for i in images]
 		return np.vstack(images)
-		
 
 	def img_horizontal_concat(self, images, pad=0, pad_value=255, pad_bottom=False):
 		nb_images = len(images)
@@ -271,22 +268,29 @@ class RecordDataHelper(RecordData):
 					for i in images]
 		else:
 			assert np.all(np.equal(h_list, h_list[0]))
+
 		if pad != 0:
-			images = [np.concatenate(i, np.ones([i.shape[0], pad,]+list(i.shape[2:]) , dtype=i.dtype)*pad_value, axis=0) for i in images]
+			images = [np.hstack([i, np.ones([i.shape[0], pad,]+list(i.shape[2:]), dtype=i.dtype)*pad_value]) for i in images[:-1]] + [images[-1],]
+
+		if not isinstance(images, list):
+			images = [i for i in images]
 		return np.hstack(images)
 		
 	def img_grid(self, images, nb_images_per_row=10):
 		ret = []
 		while len(images) >= nb_images_per_row:
-			ret.append(self.img_horizontal_concat(images[0:nb_images_per_row]))
+			ret.append(self.img_horizontal_concat(images[0:nb_images_per_row], pad_bottom=True))
 			images = images[nb_images_per_row:]
 		if len(images) != 0:
-			ret.append(self.img_horizontal_concat(images))
-		return self.img_vertical_concat(ret)
+			ret.append(self.img_horizontal_concat(images, pad_bottom=True))
+		return self.img_vertical_concat(ret, pad_right=True)
+
+	def label_img(self, img, lbl):
+		img = np.vstack([img, np.ones([25,]+list(img.shape[1:]), dtype=img.dtype) * 255])
+		return cv2.putText(img, str(lbl), (3, img.shape[0]-3), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 1)
 
 
-
-class FeatureSpaceRecordData(RecordDataHelper):
+class FeatureSpaceData(RecordDataHelper):
 
 	def __init__(self, name, feature_list, data_source):
 		self.name = name
@@ -316,13 +320,8 @@ class FeatureSpaceRecordData(RecordDataHelper):
 		draw_interface.draw_image(title=self.name, image=self.to_image())
 
 
+class FeatureSpaceDataWLabel(FeatureSpaceData):
 
-
-class FeatureSpaceRecordDataWLabel(FeatureSpaceRecordData):
-
-	def label_img(self, img, lbl):
-		img = np.vstack([img, np.ones([25,]+list(img.shape[1:]), dtype=img.dtype) * 255])
-		return cv2.putText(img, str(lbl), (3, img.shape[0]-3), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 1)
 
 	def to_image(self, select_range=None, select_images=10, nearest_images=10):
 		if select_range is None:
@@ -352,7 +351,7 @@ class FeatureSpaceRecordDataWLabel(FeatureSpaceRecordData):
 
 
 
-class FeatureSpaceRecordData2(FeatureSpaceRecordDataWLabel):
+class FeatureSpaceData2(FeatureSpaceDataWLabel):
 
 	def __init__(self, name, feature_list, data_source, labeled_size):
 		self.name = name
@@ -372,7 +371,6 @@ class FeatureSpaceRecordData2(FeatureSpaceRecordDataWLabel):
 
 		def get_lbl(ind):
 			return self.data_source.get_cls(ind) + ('_l' if ind < self.labeled_size else '_u')
-			
 
 		image_list = []
 		for s_ind, n_inds in zip(s_indices, nearest_indices):
@@ -396,6 +394,50 @@ class FeatureSpaceRecordData2(FeatureSpaceRecordDataWLabel):
 		draw_interface.draw_image(title=self.name + " unlabeled data", image=self.to_image([self.labeled_size, len(self.feature_list)]))
 
 
+class ImageVSTensorData(RecordDataHelper):
+	def __init__(self, name, image, data, point_out_ind=None):
+		
+		assert len(image) == len(data)
+		assert len(data.shape) == 4
+
+		self.name = name
+		self.image = image
+		self.data = data
+		self.point_out_ind = point_out_ind
+	
+	def draw(self, draw_interface):
+		
+		batch_num = len(self.image)
+		num_channels = int(self.data.shape[-1])
+		num_col = int(np.ceil(np.sqrt(num_channels)))
+		num_row = int(np.ceil(float(num_channels) / float(num_col)))
+
+
+		for i in range(batch_num):
+
+			data = self.data[i]
+
+			channel_max = np.max(data, axis=(0, 1), keepdims=True)
+			channel_min = np.min(data, axis=(0, 1), keepdims=True)
+			data = (data - channel_min) / (channel_max - channel_min + 1e-5)
+			data = (data.transpose([2, 0, 1]) * 255.0).astype(np.uint8)
+		
+			left_image = self.image[i]
+			right_image = self.img_grid(data, nb_images_per_row=num_col)
+
+			middle_images = []
+			if self.point_out_ind is not None:
+				for name, value in self.point_out_ind.items():
+					middle_images.append(self.label_img(cv2.cvtColor(data[value[i]], cv2.COLOR_GRAY2RGB), name +':%d'%(value[i])))
+
+			if len(right_image.shape) == 2:
+				right_image = cv2.cvtColor(right_image, cv2.COLOR_GRAY2RGB)
+
+			out_image = self.img_horizontal_concat([left_image, ] + middle_images + [right_image], pad=20, pad_bottom=True)
+
+			draw_interface.draw_image(title=self.name + ' image %d'%(i+1), image=out_image)
+
+
 class DatasourceViewer(RecordDataHelper):
 	def __init__(self, datasource):
 		self.data_source = datasource
@@ -409,11 +451,7 @@ class DatasourceViewer(RecordDataHelper):
 
 
 
-
-
-
 ###########################################################################
-
 
 
 def draw_data_list_to_html(data_list, output_path, epoch_ind=None):
