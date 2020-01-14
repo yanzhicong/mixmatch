@@ -25,11 +25,14 @@ from absl import flags
 from easydict import EasyDict
 from libml import models, utils
 from libml.data_pair import DATASETS
+from libml.vis import *
 import tensorflow as tf
 
 FLAGS = flags.FLAGS
 
 
+
+@AutoVisDecorator
 class MeanTeacher(models.MultiModel):
 
     def model(self, lr, wd, ema, warmup_pos, consistency_weight, **kwargs):
@@ -39,7 +42,7 @@ class MeanTeacher(models.MultiModel):
         l_in = tf.placeholder(tf.int32, [None], 'labels')
         l = tf.one_hot(l_in, self.nclass)
         wd *= lr
-        warmup = tf.clip_by_value(tf.to_float(self.step) / (warmup_pos * (FLAGS.train_kimg << 10)), 0, 1)
+        warmup = tf.clip_by_value(tf.to_float(self.epoch) / (warmup_pos * FLAGS.epochs), 0, 1)
 
         classifier = functools.partial(self.classifier, **kwargs)
         logits_x = classifier(x_in, training=True)
@@ -57,9 +60,13 @@ class MeanTeacher(models.MultiModel):
 
         loss = tf.nn.softmax_cross_entropy_with_logits_v2(labels=l, logits=logits_x)
         loss = tf.reduce_mean(loss)
-        tf.summary.scalar('losses/xe', loss)
-        tf.summary.scalar('losses/mt', loss_mt)
 
+        self.train_step_monitor_summary = tf.summary.merge([
+            tf.summary.scalar('losses/xe', loss),
+            tf.summary.scalar('losses/mt', loss_mt),
+            tf.summary.scalar('vars/warmup', warmup),
+        ])
+        
         post_ops.append(ema_op)
         post_ops.extend([tf.assign(v, v * (1 - wd)) for v in utils.model_vars('classify') if 'kernel' in v.name])
 
@@ -77,7 +84,8 @@ class MeanTeacher(models.MultiModel):
         return EasyDict(
             x=x_in, y=y_in, label=l_in, train_op=train_op, tune_op=train_bn,
             classify_raw=tf.nn.softmax(classifier(x_in, training=False)),  # No EMA, for debugging.
-            classify_op=tf.nn.softmax(classifier(x_in, getter=ema_getter, training=False)))
+            classify_op=tf.nn.softmax(classifier(x_in, getter=ema_getter, training=False)),
+            cam_op=self.cam_ext(x_in, training=False, **kwargs))
 
 
 def main(argv):
@@ -100,7 +108,9 @@ def main(argv):
         scales=FLAGS.scales or (log_width - 2),
         filters=FLAGS.filters,
         repeat=FLAGS.repeat)
-    model.train(FLAGS.train_kimg << 10, FLAGS.report_kimg << 10)
+        
+    model.train(FLAGS.epochs, FLAGS.imgs_per_epoch // FLAGS.batch)
+    # model.train(FLAGS.train_kimg << 10, FLAGS.report_kimg << 10)
 
 
 if __name__ == '__main__':
@@ -116,6 +126,9 @@ if __name__ == '__main__':
     FLAGS.set_default('dataset', 'cifar10.3@250-5000')
     FLAGS.set_default('batch', 64)
     FLAGS.set_default('lr', 0.002)
-    FLAGS.set_default('train_kimg', 1 << 16)
+    FLAGS.set_default('lr_decay_rate', 0.001)
+    FLAGS.set_default('epochs', 100)
+    FLAGS.set_default('decay_start_epoch', 20)
+    FLAGS.set_default('imgs_per_epoch', 50000)
     flags.register_validator('nu', lambda nu: nu == 2, message='nu must be 2 for pi-model.')
     app.run(main)

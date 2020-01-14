@@ -16,6 +16,7 @@
 import functools
 import itertools
 
+
 import tensorflow as tf
 from absl import flags
 
@@ -35,10 +36,9 @@ import contextlib
 class BaseMultiModel(ClassifySemi):
 
     def __init__(self, *wargs, **kwargs):
-        self.weights_dict = {}
+        self.weights_dict = OrderedDict()
         super(BaseMultiModel, self).__init__(*wargs, **kwargs)
         
-
 
     @contextlib.contextmanager
     def collect_weights(self, layer_name):
@@ -75,7 +75,18 @@ class BaseMultiModel(ClassifySemi):
             for var in var_list:
                 print('\t', var.name, var.get_shape())
 
+    @property
+    def model_vars(self):
+        all_var_list = []
+        for key, var_list in self.weights_dict.items():
+            all_var_list += var_list
+        return all_var_list
 
+    @property
+    def model_var_names(self):
+        return [v.name for v in self.model_vars]
+
+    
 
 class CNN13(BaseMultiModel):
     """Simplified reproduction of the Mean Teacher paper network. filters=128 in original implementation.
@@ -333,6 +344,15 @@ class MultiModel(CNN13, ConvNet, ResNet, ShakeNet, ResNet18):
         else:
             raise ValueError('Model %s does not exists, available ones are %s' % (arch, self.MODELS))
 
+    def get_conv_out_layer(self, arch, **kwargs):
+        return {
+            self.MODEL_CNN13 : CNN13.conv_out_layer,
+            self.MODEL_CONVNET : ConvNet.conv_out_layer,
+            self.MODEL_RESNET : ResNet.conv_out_layer,
+            self.MODEL_RESNET18 : ResNet18.conv_out_layer,
+            self.MODEL_SHAKE : ShakeNet.conv_out_layer,
+        }[arch](self, **kwargs)
+
 
     def classifier(self, x, arch, getter=None, verbose=False, **kwargs):
         ''' 对x进行卷积，并返回最后一层的输出结果 '''
@@ -343,7 +363,6 @@ class MultiModel(CNN13, ConvNet, ResNet, ShakeNet, ResNet18):
             for layer_name, layer_func in layer_func_dict.items():
                 with self.collect_weights(layer_name):
                     out = layer_func(out)
-
                 if verbose:
                     print('\t%s : '%layer_name, out.get_shape())
             return out
@@ -393,16 +412,8 @@ class MultiModel(CNN13, ConvNet, ResNet, ShakeNet, ResNet18):
         input_h = int(x.get_shape()[1])
         input_w = int(x.get_shape()[2])
 
-        cnn_out_layer = {
-            self.MODEL_CNN13 : CNN13.conv_out_layer,
-            self.MODEL_CONVNET : ConvNet.conv_out_layer,
-            self.MODEL_RESNET : ResNet.conv_out_layer,
-            self.MODEL_RESNET18 : ResNet18.conv_out_layer,
-            self.MODEL_SHAKE : ShakeNet.conv_out_layer,
-        }[arch](self, **kwargs)
-
         endpoints = self.features_ext(x, arch, getter=getter, **kwargs)
-        cnn_output = endpoints[cnn_out_layer]
+        cnn_output = endpoints[self.get_conv_out_layer(arch, **kwargs)]
 
         fc_weight = self.get_kernel_by_layer('fc1')
         cam_map = tf.einsum('bijf,fc->bijc', cnn_output, fc_weight)
@@ -412,13 +423,68 @@ class MultiModel(CNN13, ConvNet, ResNet, ShakeNet, ResNet18):
 
 
 class BilinearModel(MultiModel):
-    def get_model(self, x, arch, getter=None, **kwargs):
-        if arch.startswith('bcnn'):
-            splits = arch.split('_')[1:]
-            if len(splits) == 1:
-                splits *= 2
+
+
+    def get_fc_model(self, training, **kwargs):
+        return OrderedDict([
+                ('dropout', partial(tf.layers.dropout, rate = 0.8, training=training)),
+                ('fc1', partial(tf.layers.dense, units=self.nclass, kernel_initializer=tf.glorot_normal_initializer())),
+                ('logits', tf.identity),
+        ])
+
+    def apply(self, x, layer_func_dict, prefix=None, verbose=False, stop_at=''):
+        prefix = prefix or ''
+        out = x
+        for layer_name, layer_func in layer_func_dict.items():
+            with self.collect_weights(prefix+layer_name):
+                out = layer_func(out)
+            if verbose:
+                print('\t%s : '%layer_name, out.get_shape())
+            if  layer_name == stop_at:
+                return out
+        return out
+
+    def classifier(self, x, arch, getter=None, verbose=False, **kwargs):
+        ''' 对x进行卷积，并返回最后一层的输出结果 '''
+
+        print(arch)
+        if not arch.startswith('bcnn'):
+            return super(BilinearModel, self).classifier(x, arch, getter, verbose=verbose, **kwargs)
         else:
-            return super(BilinearModel, self).get_model(x, arch, getter=getter, **kwargs)
-flags.DEFINE_enum('arch', MultiModel.MODEL_RESNET, MultiModel.MODELS, 'Architecture.')
+            with tf.variable_scope(arch[0].upper()+arch[1:].lower(), reuse=tf.AUTO_REUSE, custom_getter=getter):
+                branch_arch = arch.split('_')[1]
+                layer_func_dict = self.get_model(x, branch_arch, getter=getter, **kwargs)
+                cnn_out_layer = self.get_conv_out_layer(branch_arch, **kwargs)
+
+                if verbose:
+                    print('branch1:')
+                with tf.variable_scope('branch1', reuse=tf.AUTO_REUSE, custom_getter=getter):
+                    out1 = out2 = self.apply(x, layer_func_dict, verbose=verbose, stop_at=cnn_out_layer)
+
+                if len(arch.split('_')[1:]) == 2:
+
+                    branch_arch2 = arch.split('_')[2]
+                    layer_func_dict2 = self.get_model(x, branch_arch2, getter=getter, **kwargs)
+                    cnn_out_layer2 = self.get_conv_out_layer(branch_arch2, **kwargs)
+                    
+                    if verbose:
+                        print('branch2:')
+                    with tf.variable_scope('branch2', reuse=tf.AUTO_REUSE, custom_getter=getter):
+                        out2 = self.apply(x, layer_func_dict2, verbose=verbose, stop_at=cnn_out_layer2)
+
+                pooling_out = tf.einsum('ijkm,ijkn->imn', out1, out2)
+                pooling_out = tf.layers.flatten(pooling_out)
+                if verbose:
+                    print('\t%s : '%'pooling', pooling_out.get_shape())
+                
+                fc_layer_dict = self.get_fc_model(**kwargs)
+
+
+                return self.apply(pooling_out, fc_layer_dict, verbose=verbose,)
+
+
+
+
+flags.DEFINE_enum('arch', MultiModel.MODEL_RESNET, MultiModel.MODELS + tuple(['bcnn_%s'%m for m in MultiModel.MODELS]) + tuple(['bcnn_%s_%s'%(m,m) for m in MultiModel.MODELS]), 'Architecture.')
 
 

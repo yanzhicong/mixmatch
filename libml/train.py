@@ -27,6 +27,7 @@ from collections import OrderedDict
 
 from libml import data, utils
 from libml import vis
+from libml import io as mlio
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string('train_dir', './experiments',
@@ -57,6 +58,7 @@ class Model:
         self.epoch = tf.get_variable('global_epoch', shape=[], dtype=tf.int32, initializer=tf.zeros_initializer(), trainable=False)
 
         self.plotter = vis.Plotter()
+        
 
         self.learning_rate = utils.get_exponential_learning_rate(lr=FLAGS.lr, global_epoch = self.epoch, start_epoch=FLAGS.decay_start_epoch, total_epochs=FLAGS.epochs, decay_rate=FLAGS.lr_decay_rate)
         kwargs['lr'] = self.learning_rate
@@ -153,6 +155,7 @@ class Model:
         self.plotter.to_html_report(os.path.join(self.plotter_dir, 'index.html'))
 
 
+
 class ClassifySemi(Model):
     """Semi-supervised classification."""
 
@@ -198,10 +201,11 @@ class ClassifySemi(Model):
         pass
 
 
-    def train(self, epochs, steps_per_epoch, step_summary_interval=100, epoch_summary_interval=1, ssl=True):
+    def train(self, epochs, steps_per_epoch, step_summary_interval=100, epoch_summary_interval=1, save_checkpoint_interval=None, ssl=True):
         if FLAGS.eval_ckpt:
             self.eval_checkpoint(FLAGS.eval_ckpt)
             return
+        save_checkpoint_interval = save_checkpoint_interval or epochs // 4
         batch = FLAGS.batch
         scaffold = tf.train.Scaffold(saver=tf.train.Saver(max_to_keep=FLAGS.keep_ckpt,
                                                           pad_step_number=10))
@@ -210,8 +214,6 @@ class ClassifySemi(Model):
             d = dataset.batch(batch).prefetch(
                 prefetch).make_initializable_iterator()
             return d.initializer, d.get_next()
-
-        
 
         with tf.name_scope('dataset_reader'):
             self.train_labeled = get_dataset_reader(self.dataset.train_labeled, batch)
@@ -224,44 +226,59 @@ class ClassifySemi(Model):
             self.valid = get_dataset_reader(self.dataset.valid, batch)
             self.test = get_dataset_reader(self.dataset.test, batch)
 
-        self.summary_writer = tf.summary.FileWriter(self.checkpoint_dir, graph=tf.get_default_graph())
+        self.summary_writer = tf.summary.FileWriter(self.checkpoint_dir)
+        checkpoint_saver = mlio.TFSaver(os.path.join(self.checkpoint_dir, 'checkpoint'), self)
+        time_log = utils.TimeLogger(os.path.join(self.arg_dir, 'time_log.txt'))
 
         with tf.Session(config=utils.get_config()) as train_session:
             self.session = train_session
-            self.session.run(tf.global_variables_initializer())
-            self.tmp.step = self.session.run(self.step)
+            with time_log.time_logging('global initialize'):
+                self.session.run(tf.global_variables_initializer())
+                self.tmp.step = self.session.run(self.step)
 
-            # run dataset initializer
-            if self.train_unlabeled[0] is not None:
-                self.session.run([self.train_labeled[0], self.train_unlabeled[0]])
-            else:
-                self.session.run([self.train_labeled[0],])
+            with time_log.time_logging('dataset initialize'):
+                # run dataset initializer
+                if self.train_unlabeled[0] is not None:
+                    self.session.run([self.train_labeled[0], self.train_unlabeled[0]])
+                else:
+                    self.session.run([self.train_labeled[0],])
 
-            for epoch_ind in range(epochs):
-                self.session.run(self.epoch.assign(epoch_ind))
+            with time_log.time_logging('training process'):
 
-                with utils.time_warning('call on_epoch_start', 10):
-                    self.on_epoch_start(epoch_ind, epochs)
+                for epoch_ind in range(epochs):
+                    with time_log.time_logging('epoch %d'%epoch_ind):
 
-                loop = trange(0, steps_per_epoch*batch, batch,
-                              leave=False, unit='img', unit_scale=batch,
-                              desc='Epoch %d/%d' % (1 + epoch_ind, epochs))
+                        self.session.run(self.epoch.assign(epoch_ind))
 
-                for step_ind in loop:
-                    if step_summary_interval != 0 and step_ind % step_summary_interval == 0:
-                        self.train_step(train_session, self.train_labeled[1], self.train_unlabeled[1], self.train_step_monitor_summary)
-                    else:
-                        self.train_step(train_session, self.train_labeled[1], self.train_unlabeled[1])
+                        with time_log.time_logging('epoch %d call on_epoch_start'%epoch_ind, level=1):
+                            self.on_epoch_start(epoch_ind, epochs)
 
-                    while self.tmp.print_queue:
-                        loop.write(self.tmp.print_queue.pop(0))
+                        loop = trange(0, steps_per_epoch*batch, batch,
+                                    leave=False, unit='img', unit_scale=batch,
+                                    desc='Epoch %d/%d' % (1 + epoch_ind, epochs))
 
-                if epoch_summary_interval != 0 and epoch_ind % epoch_summary_interval == 0:
-                    s, st = self.session.run([self.summary, self.step])
-                    self.summary_writer.add_summary(s, global_step=st)
+                        with time_log.time_logging('epoch %d train'%epoch_ind, level=1):
+                            for step_ind in loop:
+                                
+                                if step_summary_interval != 0 and step_ind % step_summary_interval == 0:
+                                    self.train_step(train_session, self.train_labeled[1], self.train_unlabeled[1], self.train_step_monitor_summary)
+                                else:
+                                    self.train_step(train_session, self.train_labeled[1], self.train_unlabeled[1])
 
-                with utils.time_warning('call on_epoch_end', 10):
-                    self.on_epoch_end(epoch_ind, epochs)
+                                while self.tmp.print_queue:
+                                    loop.write(self.tmp.print_queue.pop(0))
+
+                        if epoch_summary_interval != 0 and epoch_ind % epoch_summary_interval == 0:
+                            with time_log.time_logging('epoch %d add summary'%epoch_ind, level=1):
+                                s, st = self.session.run([self.summary, self.step])
+                                self.summary_writer.add_summary(s, global_step=st)
+
+                        with time_log.time_logging('epoch %d call on_epoch_end'%epoch_ind, level=1):
+                            self.on_epoch_end(epoch_ind, epochs)
+
+                        if save_checkpoint_interval != 0 and (epoch_ind % save_checkpoint_interval == 0 or epoch_ind+1 == epochs):
+                            with time_log.time_logging('epoch %d save checkpoint'%epoch_ind, level=1):
+                                checkpoint_saver.save(self, epoch_ind)
 
             while self.tmp.print_queue:
                 print(self.tmp.print_queue.pop(0))

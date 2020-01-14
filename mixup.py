@@ -27,7 +27,7 @@ import tensorflow as tf
 FLAGS = flags.FLAGS
 
 
-class Mixup(models.MultiModel):
+class Mixup(models.BilinearModel):
 
     def augment(self, x, l, beta, **kwargs):
         del kwargs
@@ -70,7 +70,6 @@ class Mixup(models.MultiModel):
         tf.summary.scalar('losses/xe', loss_xe)
         tf.summary.scalar('losses/xeu', loss_xeu)
 
-
         ema = tf.train.ExponentialMovingAverage(decay=ema)
         ema_op = ema.apply(utils.model_vars())
         ema_getter = functools.partial(utils.getter_ema, ema)
@@ -91,8 +90,6 @@ class Mixup(models.MultiModel):
             x=x_in, y=y_in, label=l_in, train_op=train_op, tune_op=train_bn,
             classify_raw=tf.nn.softmax(classifier(x_in, training=False)),  # No EMA, for debugging.
             classify_op=tf.nn.softmax(classifier(x_in, getter=ema_getter, training=False)))
-
-
 
 
 def main(argv):

@@ -242,3 +242,18 @@ def time_warning(name, thres):
     end = time.time()
     if end - start > thres:
         print("Warning : %s costs %0.3fs"%(name, end - start))
+
+
+class TimeLogger(object):
+    def __init__(self, output_filename):
+        self.output_filename = output_filename
+        with open(self.output_filename, 'w'):
+            pass
+
+    @contextlib.contextmanager
+    def time_logging(self, name, level=0):
+        start = time.time()
+        yield
+        end = time.time()
+        with open(self.output_filename, 'a') as outfile:
+            outfile.write('\t'*level+name+' cost %0.4fs\n'%(end-start))

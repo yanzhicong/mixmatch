@@ -7,7 +7,10 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 
+from absl import flags
+
 import matplotlib.pyplot as plt
+from collections import OrderedDict
 import seaborn
 import csv
 from yattag import Doc
@@ -18,9 +21,14 @@ import cv2
 import base64
 
 from scipy.spatial.distance import cdist
+from matplotlib import cm
+
+FLAGS = flags.FLAGS
 
 
 ###############################################
+
+
 
 class Plotter(object):
 	'''
@@ -276,13 +284,13 @@ class RecordDataHelper(RecordData):
 			images = [i for i in images]
 		return np.hstack(images)
 		
-	def img_grid(self, images, nb_images_per_row=10):
+	def img_grid(self, images, nb_images_per_row=10, pad=0, pad_value=255):
 		ret = []
 		while len(images) >= nb_images_per_row:
-			ret.append(self.img_horizontal_concat(images[0:nb_images_per_row], pad_bottom=True))
+			ret.append(self.img_horizontal_concat(images[0:nb_images_per_row], pad_bottom=True, pad=pad, pad_value=pad_value))
 			images = images[nb_images_per_row:]
 		if len(images) != 0:
-			ret.append(self.img_horizontal_concat(images, pad_bottom=True))
+			ret.append(self.img_horizontal_concat(images, pad_bottom=True, pad=pad, pad_value=pad_value))
 		return self.img_vertical_concat(ret, pad_right=True)
 
 	def label_img(self, img, lbl):
@@ -395,43 +403,64 @@ class FeatureSpaceData2(FeatureSpaceDataWLabel):
 
 
 class ImageVSTensorData(RecordDataHelper):
-	def __init__(self, name, image, data, point_out_ind=None):
+	def __init__(self, name, image, data, point_out_ind=None, channel_wise_normalize=False):
 		
 		assert len(image) == len(data)
 		assert len(data.shape) == 4
+
+		if channel_wise_normalize:
+			data = self.normalization(data, normalize_axis=(1, 2,))
+		else:
+			data = self.normalization(data, normalize_axis=(1, 2, 3,))
+			
 
 		self.name = name
 		self.image = image
 		self.data = data
 		self.point_out_ind = point_out_ind
+		self.cmap = cm.ScalarMappable()
 	
-	def draw(self, draw_interface):
+	def normalization(self, data, normalize_axis=None):
+		channel_max = np.max(data, axis=normalize_axis, keepdims=True)
+		channel_min = np.min(data, axis=normalize_axis, keepdims=True)
+		data = (data - channel_min) / (channel_max - channel_min + 1e-5)
+		return data
+
+	def convert_to_color(self, image):
+		ret = self.cmap.to_rgba(image, bytes=True, norm=False)
+		return ret
+
+		# img = np.repeat(image[:, :, np.newaxis], 3, axis=2)
+		# color1 = np.zeros_like(img, dtype=np.uint8)
+		# color1[:, :, 0] = 255
+		# color2 = np.zeros_like(img, dtype=np.uint8)
+		# color2[:, :, 2] = 255
+		# ret = (img * color2 + (1.0 - img) * color1).astype(np.uint8)
+		# return ret
+
+	def draw(self, draw_interface, ):
 		
 		batch_num = len(self.image)
 		num_channels = int(self.data.shape[-1])
 		num_col = int(np.ceil(np.sqrt(num_channels)))
 		num_row = int(np.ceil(float(num_channels) / float(num_col)))
 
-
 		for i in range(batch_num):
 
 			data = self.data[i]
-
-			channel_max = np.max(data, axis=(0, 1), keepdims=True)
-			channel_min = np.min(data, axis=(0, 1), keepdims=True)
-			data = (data - channel_min) / (channel_max - channel_min + 1e-5)
-			data = (data.transpose([2, 0, 1]) * 255.0).astype(np.uint8)
+			grid_imgs = [self.convert_to_color(data[:, :, i]) for i in range(data.shape[2])]
 		
-			left_image = self.image[i]
-			right_image = self.img_grid(data, nb_images_per_row=num_col)
+			left_image = self.convert_to_color(self.image[i])
+
+			right_image = self.img_grid(grid_imgs, nb_images_per_row=num_col)
 
 			middle_images = []
 			if self.point_out_ind is not None:
 				for name, value in self.point_out_ind.items():
-					middle_images.append(self.label_img(cv2.cvtColor(data[value[i]], cv2.COLOR_GRAY2RGB), name +':%d'%(value[i])))
-
-			if len(right_image.shape) == 2:
-				right_image = cv2.cvtColor(right_image, cv2.COLOR_GRAY2RGB)
+					img = self.normalization(data[:, :, value[i]])
+					img = self.convert_to_color(img)
+					img = self.label_img(img, name +':%d'%(value[i]))
+					middle_images.append(img)
 
 			out_image = self.img_horizontal_concat([left_image, ] + middle_images + [right_image], pad=20, pad_bottom=True)
 
@@ -451,6 +480,52 @@ class DatasourceViewer(RecordDataHelper):
 
 
 
+
+def AutoVisDecorator(cls):
+	class Wrapper(cls):
+		def on_epoch_start(self, epoch_ind, epochs):
+			super(cls, self).on_epoch_start(epoch_ind, epochs)
+
+			if epoch_ind % 5 != 0:
+				return
+
+			eval_dict = OrderedDict(
+					train=self.dataset.labeled_data,
+					valid=self.dataset.valid_data,
+					test=self.dataset.test_data)
+
+			for subset, data_source in eval_dict.items():
+
+				nb_images = data_source.size
+				choose_indices = np.random.choice(np.arange(nb_images), size=10, replace=False)
+				labels = np.array([data_source.get_label(ind) for ind in choose_indices])
+				images = np.array([data_source.get_img(ind) for ind in choose_indices])
+
+				feats, cam = self.session.run(	
+					self.ops.cam_op,
+					feed_dict={
+						self.ops.x: images.astype(np.float32) / 255.0
+					})
+				data_list = [
+					ImageVSTensorData('class activation map', images, cam, point_out_ind={
+						'l' : labels,
+						'p' : np.argmax(feats.logits, axis=1),
+					}, channel_wise_normalize=False),
+				]
+				watch_out_list = {
+					'cnn13' : ['bn2_3', 'bn1_2'],
+					'resnet18' : ['res3b', 'res2b', 'res1b']
+				}.get(FLAGS.arch, [])
+				data_list += [ImageVSTensorData(l, images, feats[l]) for l in watch_out_list]
+				draw_data_list_to_html(data_list, os.path.join(self.train_dir, 'cam_view_'+subset), epoch_ind=int(self.session.run(self.epoch)))
+
+	Wrapper.__name__ = cls.__name__
+	Wrapper.__doc__ = cls.__doc__
+	
+	return Wrapper
+
+
+
 ###########################################################################
 
 
@@ -467,8 +542,6 @@ def draw_data_list_to_html(data_list, output_path, epoch_ind=None):
 	if epoch_ind is not None:
 		# keep recording the change in each epoch
 		shutil.copy(os.path.join(output_path, 'index.html'), os.path.join(output_path, 'index_epoch%d.html'%epoch_ind))
-
-
 
 
 if __name__ == "__main__":

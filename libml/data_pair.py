@@ -57,9 +57,11 @@ DATASETS.update([DataSet.creator('svhn_noextra', seed, label, valid, [augment_sv
                         itertools.product(range(6), [250, 500, 1000, 2000, 4000, 8000], [1, 5000])])
 
 
-DATASETS.update(
-    [TxtDataSet.creator('miniimagenet', seed, label, valid, [argument_miniimagenet, stack_augment(argument_miniimagenet)], width=84, height=84, nclass=100, do_memoize=False)
+
+DATASETS.update([TxtDataSet.creator('miniimagenet', seed, label, valid, [argument_miniimagenet, stack_augment(argument_miniimagenet)], width=84, height=84, nclass=100, do_memoize=False)
                     for seed, label, valid in
                         itertools.product(range(6), [40, 100], [1, 50])])
 
+DATASETS.update([TxtDataSet.creator('miniimagenet', 0, 0, valid, argument_miniimagenet, width=84, height=84, nclass=100, do_memoize=False, full_dataset=True)
+                    for valid in [1, 50]])
 

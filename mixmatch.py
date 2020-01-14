@@ -18,6 +18,7 @@
 - Use the sharpened distribution directly as a smooth label in MixUp.
 """
 
+
 import functools
 import os
 
@@ -27,13 +28,15 @@ from easydict import EasyDict
 from libml import layers, utils, models
 from libml.data_pair import DATASETS
 from libml.layers import MixMode
+from libml.vis import *
 import tensorflow as tf
-
+from collections import OrderedDict
 FLAGS = flags.FLAGS
 
 
-class MixMatch(models.MultiModel):
 
+@AutoVisDecorator
+class MixMatch(models.MultiModel):
     def augment(self, x, l, beta, **kwargs):
         assert 0, 'Do not call.'
 
@@ -88,13 +91,11 @@ class MixMatch(models.MultiModel):
         self.loss_xe = loss_xe
         self.loss_l2u = loss_l2u
 
-
         ema = tf.train.ExponentialMovingAverage(decay=ema)
         ema_op = ema.apply(utils.model_vars())
         ema_getter = functools.partial(utils.getter_ema, ema)
         post_ops.append(ema_op)
         post_ops.extend([tf.assign(v, v * (1 - wd)) for v in utils.model_vars('classify') if 'kernel' in v.name])
-
 
         train_op = tf.train.AdamOptimizer(lr).minimize(loss_xe + w_match * loss_l2u, colocate_gradients_with_ops=True)
         with tf.control_dependencies([train_op]):
@@ -118,7 +119,8 @@ class MixMatch(models.MultiModel):
             train_op=train_op,
             tune_op=train_bn,
             classify_raw=tf.nn.softmax(classifier(x_in, training=False)),  # No EMA, for debugging.
-            classify_op=tf.nn.softmax(classifier(x_in, getter=ema_getter, training=False)))
+            classify_op=tf.nn.softmax(classifier(x_in, getter=ema_getter, training=False)),
+            cam_op=self.cam_ext(x_in, training=False, **kwargs))
 
 
 def main(argv):
