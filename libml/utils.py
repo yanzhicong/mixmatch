@@ -247,8 +247,17 @@ def time_warning(name, thres):
 class TimeLogger(object):
     def __init__(self, output_filename):
         self.output_filename = output_filename
+        self.start_time = time.time()
         with open(self.output_filename, 'w'):
             pass
+
+    def get_time_elapsed(self, time):
+        diff = int(time - self.start_time)
+        s = diff % 60
+        m = diff // 60 % 60
+        h = diff // 60 // 60 % 24
+        d = diff // 60 // 60 // 24
+        return "%d:%02d:%02d:%02d\t"%(d,h,m,s)
 
     @contextlib.contextmanager
     def time_logging(self, name, level=0):
@@ -256,4 +265,4 @@ class TimeLogger(object):
         yield
         end = time.time()
         with open(self.output_filename, 'a') as outfile:
-            outfile.write('\t'*level+name+' cost %0.4fs\n'%(end-start))
+            outfile.write(self.get_time_elapsed(end)+'\t'*level+name+' cost %0.4fs\n'%(end-start))

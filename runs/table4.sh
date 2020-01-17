@@ -26,7 +26,7 @@ for size in 250 4000; do
     echo "python ablation/ab_mixmatch.py $common_args --mixmode=xx.  # Only mixup labeled"
     echo "python ablation/ab_mixmatch.py $common_args --mixmode=.yy  # Only mixup unlabeled"
     echo "python ablation/ab_mixmatch.py $common_args --mixmode=xx.yy  # Mixup labeled and unlabeled separately"
-    echo "python ict.py $common_args --consistency_weight=1000  # ICT"
+    echo "python ict.py $common_args --c_weight=1000  # ICT"
     echo
 done
 

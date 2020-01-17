@@ -34,4 +34,4 @@ python mixup_sl.py --scales 3 --repeat 2 --filters=128 --dataset=miniimagenet-50
 
 
 
-# python mean_teacher.py --scales 3 --repeat 2 --filters=128 --dataset=miniimagenet.1@40-50 --wd=0.2 --smoothing=0.001 --consistency_weight=50 --whiten --arch resnet18  --batch 64 --epochs 400 --decay_start_epoch 50 
+# python mean_teacher.py --scales 3 --repeat 2 --filters=128 --dataset=miniimagenet.1@40-50 --wd=0.2 --smoothing=0.001 --c_weight=50 --whiten --arch resnet18  --batch 64 --epochs 400 --decay_start_epoch 50 

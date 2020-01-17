@@ -35,7 +35,7 @@ FLAGS = flags.FLAGS
 @AutoVisDecorator
 class MeanTeacher(models.MultiModel):
 
-    def model(self, lr, wd, ema, warmup_pos, consistency_weight, **kwargs):
+    def model(self, lr, wd, ema, warmup_pos, c_weight, **kwargs):
         hwc = [self.dataset.height, self.dataset.width, self.dataset.colors]
         x_in = tf.placeholder(tf.float32, [None] + hwc, 'x')
         y_in = tf.placeholder(tf.float32, [None, 2] + hwc, 'y')
@@ -70,7 +70,7 @@ class MeanTeacher(models.MultiModel):
         post_ops.append(ema_op)
         post_ops.extend([tf.assign(v, v * (1 - wd)) for v in utils.model_vars('classify') if 'kernel' in v.name])
 
-        train_op = tf.train.AdamOptimizer(lr).minimize(loss + loss_mt * warmup * consistency_weight,
+        train_op = tf.train.AdamOptimizer(lr).minimize(loss + loss_mt * warmup * c_weight,
                                                        colocate_gradients_with_ops=True)
         with tf.control_dependencies([train_op]):
             train_op = tf.group(*post_ops)
@@ -103,8 +103,7 @@ def main(argv):
         nclass=dataset.nclass,
         ema=FLAGS.ema,
         smoothing=FLAGS.smoothing,
-        consistency_weight=FLAGS.consistency_weight,
-
+        c_weight=FLAGS.c_weight,
         scales=FLAGS.scales or (log_width - 2),
         filters=FLAGS.filters,
         repeat=FLAGS.repeat)
@@ -115,7 +114,7 @@ def main(argv):
 
 if __name__ == '__main__':
     utils.setup_tf()
-    flags.DEFINE_float('consistency_weight', 50., 'Consistency weight.')
+    flags.DEFINE_float('c_weight', 50., 'Consistency weight.')
     flags.DEFINE_float('warmup_pos', 0.4, 'Relative position at which constraint loss warmup ends.')
     flags.DEFINE_float('wd', 0.02, 'Weight decay.')
     flags.DEFINE_float('ema', 0.999, 'Exponential moving average of params.')
@@ -132,3 +131,4 @@ if __name__ == '__main__':
     FLAGS.set_default('imgs_per_epoch', 50000)
     flags.register_validator('nu', lambda nu: nu == 2, message='nu must be 2 for pi-model.')
     app.run(main)
+

@@ -59,7 +59,6 @@ class Model:
 
         self.plotter = vis.Plotter()
         
-
         self.learning_rate = utils.get_exponential_learning_rate(lr=FLAGS.lr, global_epoch = self.epoch, start_epoch=FLAGS.decay_start_epoch, total_epochs=FLAGS.epochs, decay_rate=FLAGS.lr_decay_rate)
         kwargs['lr'] = self.learning_rate
 
@@ -128,7 +127,7 @@ class Model:
         return instance
 
     def experiment_name(self, **kwargs):
-        args = [x + str(y) for x, y in sorted(kwargs.items())]
+        args = [x + str(y) for x, y in sorted(kwargs.items()) if x not in ['nclass', 'batch', 'wd']]
         return '_'.join([self.__class__.__name__] + args)
 
     def eval_mode(self, ckpt=None):

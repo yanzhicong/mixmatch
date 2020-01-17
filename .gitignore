@@ -8,3 +8,4 @@ data_ssl*
 ~$$class_uml.~vsdx
 test_plabel.pkl
 test_dir/
+.ipynb_checkpoints/*

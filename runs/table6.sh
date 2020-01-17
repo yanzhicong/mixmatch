@@ -20,12 +20,12 @@ for seed in 1 2 3 4 5; do
 echo
 for size in 250 500 1000 2000 4000; do
     common_args="--train_dir experiments/compare --dataset=svhn_noextra.${seed}@${size}-1"
-    echo "python ict.py $common_args --wd=0.02 --beta=0.5 --consistency_weight=20"
-    echo "python mean_teacher.py $common_args --wd=0.02 --smoothing=0.001 --consistency_weight=150"
+    echo "python ict.py $common_args --wd=0.02 --beta=0.5 --c_weight=20"
+    echo "python mean_teacher.py $common_args --wd=0.02 --smoothing=0.001 --c_weight=150"
     echo "python mixmatch.py $common_args --wd=0.02 --beta=0.75 --w_match=250"
     echo "python mixup.py $common_args --wd=0.02 --beta=0.25"
-    echo "python pi_model.py $common_args --wd=0.2 --smoothing=0.001 --consistency_weight=5"
-    echo "python pseudo_label.py $common_args --wd=0.02 --smoothing=0.01 --consistency_weight=2"
+    echo "python pi_model.py $common_args --wd=0.2 --smoothing=0.001 --c_weight=5"
+    echo "python pseudo_label.py $common_args --wd=0.02 --smoothing=0.01 --c_weight=2"
     echo "python vat.py $common_args --wd=0.02 --smoothing=0.01"
 done
 done

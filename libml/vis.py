@@ -1,32 +1,37 @@
 import os
 import sys
 import shutil
+import traceback
+import contextlib
+import base64
+import csv
+
 import numpy as np
 import pandas as pd
+from scipy.spatial.distance import cdist
 
 import matplotlib
 matplotlib.use("Agg")
 
 from absl import flags
 
-import matplotlib.pyplot as plt
 from collections import OrderedDict
 import seaborn
-import csv
+
 from yattag import Doc
 from yattag import indent
-import traceback
-import contextlib
-import cv2
-import base64
 
-from scipy.spatial.distance import cdist
+import cv2
+
+
+
+import matplotlib.pyplot as plt
 from matplotlib import cm
 
 FLAGS = flags.FLAGS
 
 
-###############################################
+##################################################
 
 
 
@@ -58,6 +63,19 @@ class Plotter(object):
 			os.mkdir(p)
 		return p
 
+
+	@classmethod
+	def merge(cls, plotter_dict):
+		new_plt = Plotter()
+
+		scalar_name_set = set()
+		dist_name_set = set()
+
+		for plt_name, plt in plotter_dict.items():
+			scalar_name_list plt._scalar_data_frame_dict.items():
+				pass
+
+
 	def scalar(self, name, step, value, epoch=None):
 		if isinstance(value, dict):
 			data = value.copy()
@@ -80,22 +98,19 @@ class Plotter(object):
 		else:
 			self._scalar_data_frame_dict[name] = self._scalar_data_frame_dict[name].append(df, ignore_index=True)
 
-	def dist(self, name, step, mean, var, epoch=None):
-		if epoch is not None:
-			df = pd.DataFrame({'epoch' : epoch, 'step' : step, name+'_mean' : mean, name+'_var' : var }, index=[0])
-		else:
-			df = pd.DataFrame({'step' : step, name+'_mean' : mean, name+'_var' : var, }, index=[0])
-
-		if name not in self._dist_data_frame_dict:
-			self._dist_data_frame_dict[name] = df
-		else:
-			self._dist_data_frame_dict[name] = self._dist_data_frame_dict[name].append(df, ignore_index=True)
-
-
-	def dist2(self, name, step, value_list, epoch=None):
-		mean = np.mean(value_list)
-		var = np.var(value_list)
-		self.dist(name, step, mean, var, epoch=epoch)
+	# def dist(self, name, step, mean, var, epoch=None):
+	# 	if epoch is not None:
+	# 		df = pd.DataFrame({'epoch' : epoch, 'step' : step, name+'_mean' : mean, name+'_var' : var }, index=[0])
+	# 	else:
+	# 		df = pd.DataFrame({'step' : step, name+'_mean' : mean, name+'_var' : var, }, index=[0])
+	# 	if name not in self._dist_data_frame_dict:
+	# 		self._dist_data_frame_dict[name] = df
+	# 	else:
+	# 		self._dist_data_frame_dict[name] = self._dist_data_frame_dict[name].append(df, ignore_index=True)
+	# def dist2(self, name, step, value_list, epoch=None):
+	# 	mean = np.mean(value_list)
+	# 	var = np.var(value_list)
+	# 	self.dist(name, step, mean, var, epoch=epoch)
 
 
 	def to_csv(self, output_dir):
@@ -197,6 +212,9 @@ class RecordInterface(object):
 	def draw_image(self, image, title=''):
 		raise NotImplementedError()
 
+	# def draw_svg(self, image, title=''):
+	# 	raise NotImplementedError();
+
 	def _check_dir(self, path):
 		if not os.path.exists(path):
 			os.mkdir(path)
@@ -204,10 +222,14 @@ class RecordInterface(object):
 
 
 
-class RecordData(object):
-	def draw(self, draw_interface):
-		raise NotImplementedError()
+# class RecordData(object):
+# 	def draw(self, draw_interface):
+# 		raise NotImplementedError()
 
+
+
+
+# class ScalarData(RecordData):
 
 
 
@@ -357,7 +379,7 @@ class FeatureSpaceDataWLabel(FeatureSpaceData):
 
 		return self.img_vertical_concat(image_list)
 
-
+	
 
 class FeatureSpaceData2(FeatureSpaceDataWLabel):
 
@@ -413,7 +435,6 @@ class ImageVSTensorData(RecordDataHelper):
 		else:
 			data = self.normalization(data, normalize_axis=(1, 2, 3,))
 			
-
 		self.name = name
 		self.image = image
 		self.data = data
@@ -427,9 +448,13 @@ class ImageVSTensorData(RecordDataHelper):
 		return data
 
 	def convert_to_color(self, image):
+		# 使用matplotlib.cm模块
 		ret = self.cmap.to_rgba(image, bytes=True, norm=False)
 		return ret
 
+		# # 或者直接在两个颜色之间进行插值
+		# if len(image.shape) == 3 and image.shape[2] == 3:
+		# 	return image
 		# img = np.repeat(image[:, :, np.newaxis], 3, axis=2)
 		# color1 = np.zeros_like(img, dtype=np.uint8)
 		# color1[:, :, 0] = 255
@@ -479,14 +504,37 @@ class DatasourceViewer(RecordDataHelper):
 			interface.draw_image(self.img_grid(class_image_list), title='class%s'%str(class_ind))
 
 
+###########################################################################
+
+
+def draw_data_list_to_html(data_list, output_path, epoch_ind=None):
+	'''
+		将RecordData数据类列表绘制到输出文件中
+
+		data_list ：由RecordData派生出来子类的实例组成
+	'''
+	recorder = HtmlRecorder()
+	with recorder.start_draw(output_path):
+		for data in data_list:
+			data.draw(recorder)
+	if epoch_ind is not None:
+		# keep recording the change in each epoch
+		shutil.copy(os.path.join(output_path, 'index.html'), os.path.join(output_path, 'index_epoch%d.html'%epoch_ind))
+
+
+
+###########################################################################
 
 
 def AutoVisDecorator(cls):
+	'''
+
+	'''	
 	class Wrapper(cls):
 		def on_epoch_start(self, epoch_ind, epochs):
 			super(cls, self).on_epoch_start(epoch_ind, epochs)
 
-			if epoch_ind % 5 != 0:
+			if epoch_ind % 10 != 0:
 				return
 
 			eval_dict = OrderedDict(
@@ -526,22 +574,6 @@ def AutoVisDecorator(cls):
 
 
 
-###########################################################################
-
-
-def draw_data_list_to_html(data_list, output_path, epoch_ind=None):
-	'''
-		将RecordData数据类列表绘制到输出文件中
-
-		data_list ：由RecordData派生出来子类的实例组成
-	'''
-	recorder = HtmlRecorder()
-	with recorder.start_draw(output_path):
-		for data in data_list:
-			data.draw(recorder)
-	if epoch_ind is not None:
-		# keep recording the change in each epoch
-		shutil.copy(os.path.join(output_path, 'index.html'), os.path.join(output_path, 'index_epoch%d.html'%epoch_ind))
 
 
 if __name__ == "__main__":

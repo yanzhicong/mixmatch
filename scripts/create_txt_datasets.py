@@ -21,8 +21,8 @@ from libml.data import DATA_DIR
 
 train_folders = {
     'mini-imagenet':[
-        'E:\\Data\\mini-imagenet\\train',
-        'E:\\Data\\mini-imagenet\\test',
+        'H:\\Data\\mini-imagenet\\train',
+        'H:\\Data\\mini-imagenet\\test',
         '/mnt/data02/dataset/mini-imagenet-cls/train',
         '/mnt/data02/dataset/mini-imagenet-cls/test',
     ],
